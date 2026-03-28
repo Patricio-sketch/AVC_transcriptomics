@@ -1,0 +1,23 @@
+# R
+.Rhistory
+.RData
+.Ruserdata
+*.Rproj.user
+workspace_*.RData
+
+# Python / Jupyter
+.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Hugging Face / model cache (local runs)
+.cache/
