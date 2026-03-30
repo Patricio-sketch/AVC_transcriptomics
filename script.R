@@ -32,15 +32,34 @@ set_project_wd <- function() {
 }
 set_project_wd()
 
+options(timeout = 300)
+options(download.file.method = "curl")
 library(GEOquery)
 library(limma)
 
 # baixar dataset
-gset <- getGEO("GSE16561", GSEMatrix = TRUE)
-gset <- gset[[1]]
+gset_list <- getGEO("GSE16561", GSEMatrix = TRUE, destdir = ".", AnnotGPL = TRUE)
+if (length(gset_list) == 0) stop("Download failed: empty list returned by getGEO.")
+gset <- gset_list[[1]]
 
 # matriz de express�o
 expr <- exprs(gset)
+
+# ── QC OBRIGATÓRIO ──────────────────────────────────────────────────────────
+cat("Range da matriz de expressão:", range(expr, na.rm = TRUE), "\n")
+cat("Deve ser aprox. 0-16 para dados log2 normalizados.\n")
+
+png("QC_boxplot_amostras.png", width = 1400, height = 600)
+boxplot(
+  expr[, 1:min(30, ncol(expr))],
+  las = 2,
+  main = "Distribuição de intensidades por amostra",
+  ylab = "Intensidade (log2)",
+  cex.axis = 0.7
+)
+dev.off()
+cat("QC concluído. Verifique QC_boxplot_amostras.png antes de prosseguir.\n")
+# ────────────────────────────────────────────────────────────────────────────
 
 # metadados cl�nicos
 meta <- pData(gset)
@@ -55,11 +74,34 @@ head(meta)
 table(meta$characteristics_ch1)
 
 # criar vetor de grupos a partir da coluna description
-grupo <- ifelse(grepl("Stroke", meta$description, ignore.case = TRUE),
-                "AVC",
-                ifelse(grepl("Control", meta$description, ignore.case = TRUE),
-                       "Controle",
-                       NA))
+meta <- pData(gset)
+
+cat("Colunas disponíveis:\n")
+print(colnames(meta))
+cat("\nDistribuição description:\n")
+print(table(meta$description))
+
+cols_caract <- grep("^characteristics_ch1", colnames(meta), value = TRUE)
+texto_grupo <- apply(
+  meta[, c("title", "description", cols_caract), drop = FALSE],
+  1,
+  function(x) paste(na.omit(x), collapse = " | ")
+)
+
+grupo <- ifelse(
+  grepl("stroke|ischemic|AVC", texto_grupo, ignore.case = TRUE),
+  "AVC",
+  ifelse(
+    grepl("control|healthy|normal", texto_grupo, ignore.case = TRUE),
+    "Controle",
+    NA
+  )
+)
+
+n_avc  <- sum(grupo == "AVC",      na.rm = TRUE)
+n_ctrl <- sum(grupo == "Controle", na.rm = TRUE)
+cat(sprintf("AVC: %d | Controle: %d | NA: %d\n", n_avc, n_ctrl, sum(is.na(grupo))))
+stopifnot(n_avc >= 5 && n_ctrl >= 5)
 
 # transformar em fator
 grupo <- factor(grupo)
@@ -146,7 +188,7 @@ anotar_genes <- function(deg, gset, col_symbol = NULL, col_title = NULL, colapsa
 deg_anotado <- anotar_genes(deg, gset)
 head(deg_anotado)
 
-View(deg_anotado)
+print(head(deg_anotado, 20))
 
 library(ggplot2)
 library(ggrepel)
@@ -200,6 +242,22 @@ library(igraph)
 library(ggraph)
 library(ggplot2)
 
+safe_string_call <- function(expr, step) {
+  tryCatch(
+    expr,
+    error = function(e) {
+      stop(
+        sprintf(
+          "STRINGdb failed during '%s'. Check access to stringdb-downloads.org and try again. Original error: %s",
+          step,
+          conditionMessage(e)
+        ),
+        call. = FALSE
+      )
+    }
+  )
+}
+
 # --- Preparar conjuntos de genes Up e Down ---
 lfc_cutoff <- 1
 fdr_cutoff <- 0.05
@@ -223,6 +281,7 @@ if(length(deg_genes) < 2) stop("Poucos DEGs para gerar PPI")
 
 # --- Inicializar STRINGdb ---
 options(timeout=300000)
+options(download.file.method = "auto")
 string_db <- STRINGdb$new(version="11.5", species=9606, score_threshold=0, input_directory="")
 
 # --- Criar tabela de n�s com regula��o ---
@@ -233,13 +292,22 @@ node_annot <- data.frame(
 )
 
 # --- Mapear genes para STRING IDs ---
-mapped <- string_db$map(node_annot, "gene_symbol", removeUnmappedRows = TRUE)
-cat("Genes mapeados para STRING:", nrow(mapped), "de", nrow(node_annot), "\n")
+mapped <- safe_string_call(
+  string_db$map(node_annot, "gene_symbol", removeUnmappedRows = TRUE),
+  "gene mapping"
+)
+if (is.null(mapped)) {
+  cat("Skipping PPI analysis because STRING mapping could not be retrieved.\n")
+} else {
+  cat("Genes mapeados para STRING:", nrow(mapped), "de", nrow(node_annot), "\n")
 
 if(nrow(mapped) < 2) stop("Menos de 2 genes mapeados no STRING; PPI imposs�vel")
 
 # --- Recuperar intera��es PPI ---
-ppi_raw <- string_db$get_interactions(mapped$STRING_id)
+ppi_raw <- safe_string_call(
+  string_db$get_interactions(mapped$STRING_id),
+  "PPI download"
+)
 
 # Filtrar arestas apenas entre nossos genes e score alto
 score_cutoff <- 400
@@ -258,9 +326,9 @@ g <- graph_from_data_frame(
 )
 
 # Manter apenas maior componente conexo
-components <- components(g)
-giant <- which.max(components$csize)
-g_cc <- induced_subgraph(g, vids=V(g)[components$membership==giant])
+comp <- components(g)
+giant <- which.max(comp$csize)
+g_cc <- induced_subgraph(g, vids=V(g)[comp$membership==giant])
 
 cat("Nodes (maior CC):", vcount(g_cc), "Edges:", ecount(g_cc), "\n")
 
@@ -283,6 +351,7 @@ print(p_ppi)
 
 # --- Salvar PNG com fundo branco ---
 ggsave("PPI.png", plot=p_ppi, width=9, height=7, dpi=300, bg="white")
+}
 
 
 ##############################
@@ -314,6 +383,7 @@ cat("Down genes:", length(down_genes), "\n")
 ##############################
 # 2) Inicializar STRINGdb
 ##############################
+options(download.file.method = "auto")
 string_db <- STRINGdb$new(
   version = "11.5",
   species = 9606,
@@ -334,7 +404,10 @@ symbols_to_string_map <- function(symbols, regulation_label, string_db) {
   
   if (nrow(df) == 0) return(data.frame())
   
-  mapped <- string_db$map(df, "gene_symbol", removeUnmappedRows = TRUE)
+  mapped <- safe_string_call(
+    string_db$map(df, "gene_symbol", removeUnmappedRows = TRUE),
+    paste("gene mapping for", regulation_label)
+  )
   
   if (!("STRING_id" %in% colnames(mapped))) {
     stop("STRINGdb$map() did not return a STRING_id column. Columns: ",
@@ -359,7 +432,10 @@ run_string_enrichment <- function(symbols, label, string_db) {
     return(list(mapped = mapped, enrich = data.frame()))
   }
   
-  enr <- string_db$get_enrichment(mapped$STRING_id)
+  enr <- safe_string_call(
+    string_db$get_enrichment(mapped$STRING_id),
+    paste("enrichment for", label)
+  )
   enr <- as.data.frame(enr)
   
   enr$set_label        <- label
@@ -381,8 +457,8 @@ enr_down <- res_down$enrich
 ##############################
 # 6) Inspeçãoo rápida
 ##############################
-View(enr_up, 20)
-View(enr_down, 1) # Down tem apenas 1 termo enriquecido, provavelmente por poucos genes mapeados, não aparece nada porque não fez busca de enriquecimento
+print(head(enr_up, 20))
+print(head(enr_down, 1)) # Down tem apenas 1 termo enriquecido, provavelmente por poucos genes mapeados, não aparece nada porque não fez busca de enriquecimento
 
 #down só tem um
 mapped_down <- symbols_to_string_map(down_genes, "Down", string_db)
