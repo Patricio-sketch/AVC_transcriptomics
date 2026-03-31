@@ -23,7 +23,7 @@ set_project_wd <- function() {
       return(invisible(TRUE))
     }
   }
-  warning(
+  stop( # FIX [P4]: interrompe a execucao quando o diretorio do projeto nao pode ser determinado corretamente
     "Defina o diretório de trabalho para a pasta que contém script.R ",
     "(RStudio: Session > Set Working Directory > To Source File Location), ",
     "ou defina a variável de ambiente AVC_TRANSCRIPTOMICS_DIR."
@@ -36,11 +36,18 @@ library(GEOquery)
 library(limma)
 
 # baixar dataset
-gset <- getGEO("GSE16561", GSEMatrix = TRUE)
+dir.create("geo_cache", showWarnings = FALSE) # FIX [P5]: cria cache local para evitar re-download do GEO em execucoes subsequentes
+gset <- getGEO("GSE16561", GSEMatrix = TRUE, destdir = "geo_cache") # FIX [P5]: direciona os downloads do GEO para o cache local
 gset <- gset[[1]]
 
 # matriz de express�o
 expr <- exprs(gset)
+if (max(expr, na.rm = TRUE) > 30) { # FIX [P7]: detecta matriz aparentemente fora de escala log2 antes da normalizacao
+  message("Dados aparentemente não-log. Aplicando log2(x + 1).") # FIX [P7]: informa a transformacao log2 aplicada automaticamente
+  expr <- log2(expr + 1) # FIX [P7]: transforma a matriz para escala log2 quando necessario
+}
+expr <- normalizeBetweenArrays(expr, method = "quantile") # FIX [P7]: aplica normalizacao quantile entre arrays antes das analises subsequentes
+message("Normalização quantile aplicada.") # FIX [P7]: registra a aplicacao da normalizacao quantile
 
 # metadados cl�nicos
 meta <- pData(gset)
@@ -55,6 +62,7 @@ head(meta)
 table(meta$characteristics_ch1)
 
 # criar vetor de grupos a partir da coluna description
+if (!"description" %in% colnames(meta)) stop("Coluna 'description' ausente em meta.") # FIX [P6]: valida a presenca da coluna description antes da classificacao dos grupos
 grupo <- ifelse(grepl("Stroke", meta$description, ignore.case = TRUE),
                 "AVC",
                 ifelse(grepl("Control", meta$description, ignore.case = TRUE),
@@ -69,9 +77,11 @@ table(grupo)
 
 #remover amostras n�o classificadas
 validos <- !is.na(grupo)
+cat("Amostras removidas por grupo=NA:", sum(!validos), "\n") # FIX [P6]: reporta quantas amostras foram excluidas por nao receberem classificacao de grupo
 
 expr <- expr[, validos]
 grupo <- droplevels(grupo[validos])
+cat("Distribuição final de grupos:\n"); print(table(grupo)) # FIX [P6]: mostra a distribuicao final dos grupos apos remover amostras NA
 
 #limma
 design <- model.matrix(~0 + grupo)
@@ -222,8 +232,8 @@ cat("Total DEGs (Up+Down):", length(deg_genes), "\n")
 if(length(deg_genes) < 2) stop("Poucos DEGs para gerar PPI")
 
 # --- Inicializar STRINGdb ---
-options(timeout=300000)
-string_db <- STRINGdb$new(version="11.5", species=9606, score_threshold=0, input_directory="")
+options(timeout = 600) # FIX [P12]: 600s é suficiente para downloads STRING; 300000s (83h) era excessivo.
+string_db <- STRINGdb$new(version="11.5", species=9606, score_threshold=400, input_directory="") # FIX [P11]: aplica o threshold de score diretamente na origem das interacoes STRING
 
 # --- Criar tabela de n�s com regula��o ---
 node_annot <- data.frame(
@@ -244,8 +254,7 @@ ppi_raw <- string_db$get_interactions(mapped$STRING_id)
 # Filtrar arestas apenas entre nossos genes e score alto
 score_cutoff <- 400
 ppi <- ppi_raw %>%
-  filter(from %in% mapped$STRING_id, to %in% mapped$STRING_id) %>%
-  filter(combined_score >= score_cutoff)
+  filter(from %in% mapped$STRING_id, to %in% mapped$STRING_id) # FIX [P11]: remove o filtro manual de score porque o threshold ja e aplicado pelo STRINGdb
 
 cat("Arestas ap�s filtro (score >=", score_cutoff, "):", nrow(ppi), "\n")
 if(nrow(ppi)==0) stop("Nenhuma aresta ap�s filtro; diminua score_cutoff")
@@ -261,6 +270,7 @@ g <- graph_from_data_frame(
 components <- components(g)
 giant <- which.max(components$csize)
 g_cc <- induced_subgraph(g, vids=V(g)[components$membership==giant])
+if (vcount(g_cc) < 2) stop("Componente principal tem menos de 2 nós. Revise score_cutoff ou o conjunto de genes.") # FIX [P14]: interrompe quando a componente principal nao suporta a analise de rede
 
 cat("Nodes (maior CC):", vcount(g_cc), "Edges:", ecount(g_cc), "\n")
 
@@ -295,18 +305,18 @@ suppressPackageStartupMessages({
 })
 
 ##############################
-# 1) Selecionar top 50 genes Up e Down por logFC
+# 1) Selecionar genes Up e Down filtrados por logFC e FDR # FIX [P15]: ajusta a descricao para refletir o uso de todos os DEGs filtrados
 ##############################
 lfc_cutoff <- 1
-top_n <- 50
+fdr_cutoff <- 0.05 # FIX [P15]: adiciona o limiar de FDR para enviar ao STRING todos os DEGs filtrados
 
 deg_filtered <- deg_anotado %>%
   filter(!is.na(Gene)) %>%
-  filter(abs(logFC) > lfc_cutoff) %>%
+  filter(abs(logFC) > lfc_cutoff, adj.P.Val < fdr_cutoff) %>% # FIX [P15]: mantem todos os DEGs significativos por logFC e FDR para o enriquecimento
   mutate(regulation = ifelse(logFC > 0, "Up", "Down"))
 
-up_genes   <- deg_filtered %>% filter(regulation == "Up") %>% arrange(-logFC) %>% slice(1:top_n) %>% pull(Gene)
-down_genes <- deg_filtered %>% filter(regulation == "Down") %>% arrange(logFC) %>% slice(1:top_n) %>% pull(Gene)
+up_genes   <- deg_filtered %>% filter(regulation == "Up") %>% pull(Gene) # FIX [P15]: remove o corte artificial de top genes para usar toda a assinatura Up
+down_genes <- deg_filtered %>% filter(regulation == "Down") %>% pull(Gene) # FIX [P15]: remove o corte artificial de top genes para usar toda a assinatura Down
 
 cat("Up genes:", length(up_genes), "\n")
 cat("Down genes:", length(down_genes), "\n")
@@ -350,6 +360,7 @@ symbols_to_string_map <- function(symbols, regulation_label, string_db) {
 run_string_enrichment <- function(symbols, label, string_db) {
   
   mapped <- symbols_to_string_map(symbols, label, string_db)
+  # FIX [P15]: a selecao deve ocorrer nos termos enriquecidos apos o teste, nao nos genes de entrada enviados ao STRING
   
   cat(label, "- input symbols:", length(unique(symbols)), "\n")
   cat(label, "- mapped proteins:", nrow(mapped), "\n")
@@ -381,8 +392,8 @@ enr_down <- res_down$enrich
 ##############################
 # 6) Inspeçãoo rápida
 ##############################
-View(enr_up, 20)
-View(enr_down, 1) # Down tem apenas 1 termo enriquecido, provavelmente por poucos genes mapeados, não aparece nada porque não fez busca de enriquecimento
+cat("\n--- Top 20 termos Up ---\n"); print(head(enr_up, 20)) # FIX [P16]: substitui View por saida compativel com execucao via Rscript
+cat("\n--- Top 1 termo Down ---\n"); print(head(enr_down, 1)) # FIX [P16]: substitui View por saida compativel com execucao via Rscript
 
 #down só tem um
 mapped_down <- symbols_to_string_map(down_genes, "Down", string_db)
@@ -396,11 +407,16 @@ dir.create("string_enrichment", showWarnings = FALSE)
 rio::export(res_up$mapped,   "string_enrichment/STRING_mapping_Up.tsv")
 rio::export(res_down$mapped, "string_enrichment/STRING_mapping_Down.tsv")
 rio::export(enr_up,   "string_enrichment/STRING_enrichment_Up_all.tsv")
+rio::export(enr_down, "string_enrichment/STRING_enrichment_Down_all.tsv") # FIX [P17]: exporta tambem o enriquecimento completo dos genes Down
 
 ##############################
 # 8) Salvar workspace
 ##############################
-save.image(file = "workspace_DEG_STRING.RData")
+dir.create("rds", showWarnings = FALSE) # FIX [P18]: cria o diretorio para persistir objetos essenciais em formato RDS
+saveRDS(deg_anotado, "rds/deg_anotado.rds") # FIX [P18]: salva a tabela anotada de DEGs em arquivo RDS
+saveRDS(enr_up,      "rds/enr_up.rds") # FIX [P18]: salva o enriquecimento Up em arquivo RDS
+saveRDS(enr_down,    "rds/enr_down.rds") # FIX [P18]: salva o enriquecimento Down em arquivo RDS
+saveRDS(g_cc,        "rds/ppi_graph_cc.rds") # FIX [P18]: salva o grafo da componente conexa principal em arquivo RDS
 gc()
 
 
