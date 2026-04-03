@@ -21,3 +21,6 @@ Thumbs.db
 
 # Hugging Face / model cache (local runs)
 .cache/
+
+# Local GEO download cache
+geo_cache/

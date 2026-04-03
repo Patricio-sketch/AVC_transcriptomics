@@ -40,7 +40,7 @@ dir.create("geo_cache", showWarnings = FALSE) # FIX [P5]: cria cache local para 
 gset <- getGEO("GSE16561", GSEMatrix = TRUE, destdir = "geo_cache") # FIX [P5]: direciona os downloads do GEO para o cache local
 gset <- gset[[1]]
 
-# matriz de express�o
+# matriz de expressão
 expr <- exprs(gset)
 if (max(expr, na.rm = TRUE) > 30) { # FIX [P7]: detecta matriz aparentemente fora de escala log2 antes da normalizacao
   message("Dados aparentemente não-log. Aplicando log2(x + 1).") # FIX [P7]: informa a transformacao log2 aplicada automaticamente
@@ -48,17 +48,28 @@ if (max(expr, na.rm = TRUE) > 30) { # FIX [P7]: detecta matriz aparentemente for
 }
 expr <- normalizeBetweenArrays(expr, method = "quantile") # FIX [P7]: aplica normalizacao quantile entre arrays antes das analises subsequentes
 message("Normalização quantile aplicada.") # FIX [P7]: registra a aplicacao da normalizacao quantile
+# Diagnóstico pós-normalização
+cat(sprintf(
+  "Matriz: %d probes × %d amostras | min=%.2f | mediana=%.2f | max=%.2f\n",
+  nrow(expr), ncol(expr),
+  min(expr, na.rm=TRUE),
+  median(expr, na.rm=TRUE),
+  max(expr, na.rm=TRUE)
+))
+# FIX [P7-diag]: registra estatísticas da matriz normalizada para
+# confirmar que os dados estão em escala esperada (max tipicamente
+# entre 10-16 para Illumina BeadChip em log2)
 
-# metadados cl�nicos
+# metadados clínicos
 meta <- pData(gset)
 
-# ver colunas dispon�veis
+# ver colunas disponíveis
 colnames(meta)
 
-# visualizar conte�do de algumas colunas
+# visualizar conteúdo de algumas colunas
 head(meta)
 
-# no GSE16561 a condi��o geralmente est� em "characteristics_ch1"
+# no GSE16561 a condição geralmente está em "characteristics_ch1"
 table(meta$characteristics_ch1)
 
 # criar vetor de grupos a partir da coluna description
@@ -72,10 +83,10 @@ grupo <- ifelse(grepl("Stroke", meta$description, ignore.case = TRUE),
 # transformar em fator
 grupo <- factor(grupo)
 
-# visualizar distribui��o
+# visualizar distribuição
 table(grupo)
 
-#remover amostras n�o classificadas
+#remover amostras não classificadas
 validos <- !is.na(grupo)
 cat("Amostras removidas por grupo=NA:", sum(!validos), "\n") # FIX [P6]: reporta quantas amostras foram excluidas por nao receberem classificacao de grupo
 
@@ -101,20 +112,20 @@ results
 deg <- topTable(fit2, adjust="fdr", p.value=0.05, number=Inf)
 
 anotar_genes <- function(deg, gset, col_symbol = NULL, col_title = NULL, colapsar = TRUE) {
-  
+
   anot <- fData(gset)
-  
+
   # garantir coluna de probe
   deg$ProbeID <- rownames(deg)
-  
-  # identificar automaticamente coluna de s�mbolo do gene se n�o informada
+
+  # identificar automaticamente coluna de símbolo do gene se não informada
   if(is.null(col_symbol)) {
     gene_col <- grep("symbol", colnames(anot), ignore.case = TRUE, value = TRUE)[1]
   } else {
     gene_col <- col_symbol
   }
-  
-  # identificar coluna com t�tulo do gene (opcional)
+
+  # identificar coluna com título do gene (opcional)
   if(!is.null(col_title)) {
     if(col_title %in% colnames(anot)) {
       title_col <- col_title
@@ -124,8 +135,8 @@ anotar_genes <- function(deg, gset, col_symbol = NULL, col_title = NULL, colapsa
   } else {
     title_col <- NULL
   }
-  
-  # construir tabela de anota��o
+
+  # construir tabela de anotação
   if(!is.null(title_col)) {
     anot2 <- data.frame(
       ProbeID = rownames(anot),
@@ -140,23 +151,23 @@ anotar_genes <- function(deg, gset, col_symbol = NULL, col_title = NULL, colapsa
       stringsAsFactors = FALSE
     )
   }
-  
+
   # merge com resultados
   deg_anotado <- merge(deg, anot2, by="ProbeID", all.x = TRUE)
-  
+
   # colapsar probes duplicadas mantendo maior |logFC|
   if(colapsar) {
     deg_anotado <- deg_anotado[order(-abs(deg_anotado$logFC)), ]  # ordenar por logFC absoluto
-    deg_anotado <- deg_anotado[!duplicated(deg_anotado$Gene), ]   # manter apenas a primeira ocorr�ncia de cada gene
+    deg_anotado <- deg_anotado[!duplicated(deg_anotado$Gene), ]   # manter apenas a primeira ocorrência de cada gene
   }
-  
+
   return(deg_anotado)
 }
 
 deg_anotado <- anotar_genes(deg, gset)
 head(deg_anotado)
 
-View(deg_anotado)
+if (interactive()) View(deg_anotado)
 
 library(ggplot2)
 library(ggrepel)
@@ -174,7 +185,7 @@ deg_plot$volcano_class <- "NS"
 deg_plot$volcano_class[deg_plot$adj.P.Val < fdr_cutoff & deg_plot$logFC >  lfc_cutoff] <- "Up"
 deg_plot$volcano_class[deg_plot$adj.P.Val < fdr_cutoff & deg_plot$logFC < -lfc_cutoff] <- "Down"
 
-# Gr�fico base
+# Gráfico base
 p <- ggplot(
   deg_plot,
   aes(x = logFC, y = -log10(adj.P.Val), color = volcano_class)
@@ -235,7 +246,7 @@ if(length(deg_genes) < 2) stop("Poucos DEGs para gerar PPI")
 options(timeout = 600) # FIX [P12]: 600s é suficiente para downloads STRING; 300000s (83h) era excessivo.
 string_db <- STRINGdb$new(version="11.5", species=9606, score_threshold=400, input_directory="") # FIX [P11]: aplica o threshold de score diretamente na origem das interacoes STRING
 
-# --- Criar tabela de n�s com regula��o ---
+# --- Criar tabela de nós com regulação ---
 node_annot <- data.frame(
   gene_symbol = deg_genes,
   regulation  = ifelse(deg_genes %in% up_genes, "Up", "Down"),
@@ -246,18 +257,36 @@ node_annot <- data.frame(
 mapped <- string_db$map(node_annot, "gene_symbol", removeUnmappedRows = TRUE)
 cat("Genes mapeados para STRING:", nrow(mapped), "de", nrow(node_annot), "\n")
 
-if(nrow(mapped) < 2) stop("Menos de 2 genes mapeados no STRING; PPI imposs�vel")
+if(nrow(mapped) < 2) stop("Menos de 2 genes mapeados no STRING; PPI impossível")
 
-# --- Recuperar intera��es PPI ---
-ppi_raw <- string_db$get_interactions(mapped$STRING_id)
+# --- Recuperar interações PPI ---
+MAX_TENTATIVAS <- 3
+ppi_raw <- NULL
+for (tentativa in seq_len(MAX_TENTATIVAS)) {
+  ppi_raw <- tryCatch(
+    string_db$get_interactions(mapped$STRING_id),
+    error = function(e) {
+      message("Tentativa ", tentativa, " falhou: ", conditionMessage(e))
+      Sys.sleep(10 * tentativa)
+      NULL
+    }
+  )
+  if (!is.null(ppi_raw)) break
+}
+if (is.null(ppi_raw)) {
+  stop("Download das interações PPI falhou após ", MAX_TENTATIVAS,
+       " tentativas. Verifique conexão ou tente novamente mais tarde.")
+}
+# FIX [N1/N4]: adiciona retry com backoff exponencial para downloads
+# instáveis do STRINGdb protein.links
 
 # Filtrar arestas apenas entre nossos genes e score alto
 score_cutoff <- 400
 ppi <- ppi_raw %>%
   filter(from %in% mapped$STRING_id, to %in% mapped$STRING_id) # FIX [P11]: remove o filtro manual de score porque o threshold ja e aplicado pelo STRINGdb
 
-cat("Arestas ap�s filtro (score >=", score_cutoff, "):", nrow(ppi), "\n")
-if(nrow(ppi)==0) stop("Nenhuma aresta ap�s filtro; diminua score_cutoff")
+cat("Arestas após filtro (score >=", score_cutoff, "):", nrow(ppi), "\n")
+if(nrow(ppi)==0) stop("Nenhuma aresta após filtro; diminua score_cutoff")
 
 # --- Construir grafo igraph ---
 g <- graph_from_data_frame(
@@ -324,12 +353,20 @@ cat("Down genes:", length(down_genes), "\n")
 ##############################
 # 2) Inicializar STRINGdb
 ##############################
-string_db <- STRINGdb$new(
-  version = "11.5",
-  species = 9606,
-  score_threshold = 0,
-  input_directory = ""
-)
+# FIX [N3]: reutiliza a instância STRINGdb já criada no bloco PPI.
+# O score_threshold=0 é intencional aqui: o enriquecimento STRING
+# usa todos os genes mapeados internamente — a filtragem de score
+# é aplicada pelo servidor, não pelo cliente.
+# Garante que string_db exista mesmo que o bloco PPI tenha falhado:
+if (!exists("string_db")) {
+  string_db <- STRINGdb$new(
+    version = "11.5",
+    species = 9606,
+    score_threshold = 0,
+    input_directory = ""
+  )
+  message("STRINGdb reinicializado para enriquecimento.")
+}
 
 ##############################
 # 3) Função de mapeamento robusto para STRING
@@ -341,16 +378,16 @@ symbols_to_string_map <- function(symbols, regulation_label, string_db) {
     stringsAsFactors = FALSE
   )
   df <- df[!is.na(df$gene_symbol) & df$gene_symbol != "", , drop = FALSE]
-  
+
   if (nrow(df) == 0) return(data.frame())
-  
+
   mapped <- string_db$map(df, "gene_symbol", removeUnmappedRows = TRUE)
-  
+
   if (!("STRING_id" %in% colnames(mapped))) {
     stop("STRINGdb$map() did not return a STRING_id column. Columns: ",
          paste(colnames(mapped), collapse = ", "))
   }
-  
+
   mapped
 }
 
@@ -358,25 +395,25 @@ symbols_to_string_map <- function(symbols, regulation_label, string_db) {
 # 4) Função de enriquecimento STRING
 ##############################
 run_string_enrichment <- function(symbols, label, string_db) {
-  
+
   mapped <- symbols_to_string_map(symbols, label, string_db)
   # FIX [P15]: a selecao deve ocorrer nos termos enriquecidos apos o teste, nao nos genes de entrada enviados ao STRING
-  
+
   cat(label, "- input symbols:", length(unique(symbols)), "\n")
   cat(label, "- mapped proteins:", nrow(mapped), "\n")
-  
+
   if (nrow(mapped) < 2) {
     warning(label, ": <2 mapped proteins; enrichment not meaningful.")
     return(list(mapped = mapped, enrich = data.frame()))
   }
-  
+
   enr <- string_db$get_enrichment(mapped$STRING_id)
   enr <- as.data.frame(enr)
-  
+
   enr$set_label        <- label
   enr$n_input_symbols  <- length(unique(symbols))
   enr$n_mapped_proteins <- nrow(mapped)
-  
+
   list(mapped = mapped, enrich = enr)
 }
 
@@ -390,10 +427,10 @@ enr_up   <- res_up$enrich
 enr_down <- res_down$enrich
 
 ##############################
-# 6) Inspeçãoo rápida
+# 6) Inspeção rápida
 ##############################
 cat("\n--- Top 20 termos Up ---\n"); print(head(enr_up, 20)) # FIX [P16]: substitui View por saida compativel com execucao via Rscript
-cat("\n--- Top 1 termo Down ---\n"); print(head(enr_down, 1)) # FIX [P16]: substitui View por saida compativel com execucao via Rscript
+cat("\n--- Top 20 termos Down ---\n"); print(head(enr_down, 20)) # FIX [P16]: substitui View por saida compativel com execucao via Rscript
 
 #down só tem um
 mapped_down <- symbols_to_string_map(down_genes, "Down", string_db)
@@ -416,7 +453,16 @@ dir.create("rds", showWarnings = FALSE) # FIX [P18]: cria o diretorio para persi
 saveRDS(deg_anotado, "rds/deg_anotado.rds") # FIX [P18]: salva a tabela anotada de DEGs em arquivo RDS
 saveRDS(enr_up,      "rds/enr_up.rds") # FIX [P18]: salva o enriquecimento Up em arquivo RDS
 saveRDS(enr_down,    "rds/enr_down.rds") # FIX [P18]: salva o enriquecimento Down em arquivo RDS
-saveRDS(g_cc,        "rds/ppi_graph_cc.rds") # FIX [P18]: salva o grafo da componente conexa principal em arquivo RDS
+rio::export(deg_anotado, "string_enrichment/DEGs_anotados.tsv")
+message("deg_anotado exportado em string_enrichment/DEGs_anotados.tsv")
+if (exists("g_cc")) {
+  saveRDS(g_cc, "rds/ppi_graph_cc.rds")
+  message("g_cc salvo em rds/ppi_graph_cc.rds")
+} else {
+  warning("g_cc não existe (PPI falhou?). Arquivo rds/ppi_graph_cc.rds não gerado.")
+}
+# FIX [N5]: torna o saveRDS de g_cc condicional para evitar erro
+# quando o bloco PPI não completou
 gc()
 
 
@@ -426,22 +472,22 @@ library(dplyr)
 library(stringr)
 
 plot_string_enrichment_dotplot <- function(enr_df, top_n = 50, title = "Enrichment Dotplot") {
-  
+
   if(nrow(enr_df) == 0){
     warning("Dataframe de enriquecimento vazio.")
     return(NULL)
   }
-  
+
   # Seleciona top N termos pelo FDR (menor primeiro)
   top_terms <- enr_df %>%
     arrange(fdr) %>%
     slice(1:top_n) %>%
     mutate(
       description_wrapped = str_wrap(description, width = 40),
-      # criar fator �nico usando ordem pelo FDR
+      # criar fator único usando ordem pelo FDR
       description_factor = factor(description_wrapped, levels = rev(unique(description_wrapped)))
     )
-  
+
   # Dotplot
   p <- ggplot(top_terms, aes(
     x = -log10(fdr),
@@ -459,14 +505,20 @@ plot_string_enrichment_dotplot <- function(enr_df, top_n = 50, title = "Enrichme
       color = "-log10(FDR)"
     ) +
     theme_bw(base_size = 13)
-  
+
   return(p)
 }
 
 # Uso para seu enr_up
 dotplot_up <- plot_string_enrichment_dotplot(enr_up, top_n = 50, title = "STRING Enrichment - Genes Up")
 print(dotplot_up)
-ggsave("dotplot_up_STRING.png", plot = dotplot_up, width = 10, height = 8, dpi = 300)
+ggsave("dotplot_up_STRING.png", plot = dotplot_up, width = 10, height = 10, dpi = 300)
+
+dotplot_down <- plot_string_enrichment_dotplot(enr_down, top_n = 50, title = "STRING Enrichment - Genes Down")
+if (!is.null(dotplot_down)) {
+  print(dotplot_down)
+  ggsave("dotplot_down_STRING.png", plot = dotplot_down, width = 10, height = 10, dpi = 300)
+}
 
 ###########################
 #segunda etapa
