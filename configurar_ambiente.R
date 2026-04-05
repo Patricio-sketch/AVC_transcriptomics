@@ -1,34 +1,55 @@
-# Instala dependências R do projeto (rode uma vez por máquina).
-# Uso: Rscript configurar_ambiente.R
-#   ou no RStudio: source("configurar_ambiente.R")
+# =============================================================================
+# Package Setup — Ischemic Stroke Transcriptomics Pipeline
+# =============================================================================
+#
+# Run this script once on any new machine before executing script.R.
+# It installs all R packages required by the pipeline from Bioconductor
+# and CRAN, then verifies that every package loaded successfully.
+#
+# Usage:
+#   Rscript configurar_ambiente.R
+#   or in RStudio: source("configurar_ambiente.R")
+# =============================================================================
 
 options(repos = c(CRAN = "https://cloud.r-project.org"))
 
+# BiocManager is required to install Bioconductor packages (GEOquery, limma,
+# STRINGdb). It also handles CRAN packages, so a single call covers everything.
 if (!requireNamespace("BiocManager", quietly = TRUE)) {
   install.packages("BiocManager")
 }
 
-# Bioconductor: GEOquery, limma, STRINGdb.
-# Demais no CRAN; BiocManager::install cobre ambos.
-pacotes <- c(
-  "GEOquery",
-  "limma",
-  "STRINGdb",
-  "ggplot2",
-  "ggrepel",
-  "dplyr",
-  "igraph",
-  "ggraph",
-  "rio",
-  "stringr"
+packages <- c(
+  "GEOquery",   # GEO database access and expression matrix download
+  "limma",      # Linear models for differential expression (microarray)
+  "STRINGdb",   # STRING protein interaction database and enrichment
+  "ggplot2",    # Grammar-of-graphics plotting
+  "ggrepel",    # Non-overlapping text labels for ggplot2
+  "dplyr",      # Data manipulation and pipelines
+  "igraph",     # Graph construction and network analysis
+  "ggraph",     # Graph visualization using ggplot2 grammar
+  "rio",        # Unified data import/export (TSV, CSV, RDS)
+  "stringr"     # String manipulation utilities
 )
 
-BiocManager::install(pacotes, ask = FALSE, update = FALSE)
-if (!requireNamespace("rstudioapi", quietly = TRUE)) install.packages("rstudioapi") # FIX [P3]: instala rstudioapi separadamente apenas quando necessario para set_project_wd()
+BiocManager::install(packages, ask = FALSE, update = FALSE)
 
-message("Pacotes instalados: ", paste(pacotes, collapse = ", "))
-falhos <- pacotes[!sapply(pacotes, requireNamespace, quietly = TRUE)] # FIX [P2]: verifica se todos os pacotes de analise ficaram disponiveis apos a instalacao
-if (length(falhos) > 0) { # FIX [P2]: interrompe a configuracao quando houver pacotes faltantes
-  stop("Pacotes não instalados corretamente: ", paste(falhos, collapse = ", "))
+# rstudioapi is only needed when running interactively in RStudio to detect
+# the source file location. It is not required for Rscript execution.
+if (!requireNamespace("rstudioapi", quietly = TRUE)) {
+  install.packages("rstudioapi")
 }
-message("Concluído. Pode executar script.R.")
+
+# Verify that all packages are available after installation
+failed <- packages[!sapply(packages, requireNamespace, quietly = TRUE)]
+
+if (length(failed) > 0) {
+  stop(
+    "The following packages could not be installed: ",
+    paste(failed, collapse = ", "), "\n",
+    "Check your internet connection or Bioconductor version compatibility."
+  )
+}
+
+message("All packages installed successfully: ", paste(packages, collapse = ", "))
+message("You can now run script.R.")

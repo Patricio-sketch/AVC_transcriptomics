@@ -1,19 +1,48 @@
-# Diretório do projeto: variável de ambiente (opcional), depois pasta do script.
+# =============================================================================
+# Transcriptomics Pipeline — Ischemic Stroke (GSE16561)
+# =============================================================================
+#
+# This script processes publicly available peripheral blood gene expression
+# data from ischemic stroke patients (GEO dataset GSE16561) and produces:
+#
+#   1. Differential expression analysis (limma)           → DEG table
+#   2. Volcano plot                                        → outputs/figures/
+#   3. Protein-protein interaction network (STRINGdb)      → outputs/figures/
+#   4. Functional enrichment (Up and Down gene sets)       → string_enrichment/
+#   5. Enrichment dotplots                                 → outputs/figures/
+#
+# The enrichment output feeds into clinicalbert_vias_AVC.ipynb, which maps
+# the biological pathways to NANDA-I nursing diagnoses via ClinicalBERT.
+#
+# Run: Rscript script.R
+#   or in RStudio: Session > Set Working Directory > To Source File Location,
+#   then source("script.R")
+# =============================================================================
+
+
+# ── Working directory detection ───────────────────────────────────────────────
+# Resolves the project root in three environments in order:
+#   1. AVC_TRANSCRIPTOMICS_DIR environment variable (CI / Docker)
+#   2. --file= argument (Rscript from command line)
+#   3. RStudio active document path
 set_project_wd <- function() {
   env <- Sys.getenv("AVC_TRANSCRIPTOMICS_DIR", unset = "")
   if (nzchar(env) && dir.exists(env)) {
     setwd(env)
     return(invisible(TRUE))
   }
+
   ca <- commandArgs(trailingOnly = FALSE)
-  f <- grep("^--file=", ca, value = TRUE)
+  f  <- grep("^--file=", ca, value = TRUE)
   if (length(f)) {
     setwd(dirname(normalizePath(sub("^--file=", "", f[1]), winslash = "/")))
     return(invisible(TRUE))
   }
+
   if (file.exists("script.R")) {
     return(invisible(TRUE))
   }
+
   if (interactive() &&
       requireNamespace("rstudioapi", quietly = TRUE) &&
       rstudioapi::isAvailable()) {
@@ -23,354 +52,380 @@ set_project_wd <- function() {
       return(invisible(TRUE))
     }
   }
-  stop( # FIX [P4]: interrompe a execucao quando o diretorio do projeto nao pode ser determinado corretamente
-    "Defina o diretório de trabalho para a pasta que contém script.R ",
-    "(RStudio: Session > Set Working Directory > To Source File Location), ",
-    "ou defina a variável de ambiente AVC_TRANSCRIPTOMICS_DIR."
+
+  stop(
+    "Could not determine the project directory. ",
+    "In RStudio: Session > Set Working Directory > To Source File Location. ",
+    "Or set the environment variable AVC_TRANSCRIPTOMICS_DIR to the folder ",
+    "containing script.R."
   )
-  invisible(FALSE)
 }
+
 set_project_wd()
+
+
+# =============================================================================
+# SECTION 1 — Data Acquisition and Preprocessing
+# =============================================================================
+# We download the GSE16561 expression matrix from GEO (Illumina HumanHT-12
+# platform, peripheral blood, ischemic stroke vs. healthy controls).
+# The matrix is cached locally so re-runs do not require internet access.
+# Expression values are log2-transformed if not already, then quantile-
+# normalized to make samples comparable.
+# =============================================================================
 
 library(GEOquery)
 library(limma)
 
-# baixar dataset
-dir.create("geo_cache", showWarnings = FALSE) # FIX [P5]: cria cache local para evitar re-download do GEO em execucoes subsequentes
-gset <- getGEO("GSE16561", GSEMatrix = TRUE, destdir = "geo_cache") # FIX [P5]: direciona os downloads do GEO para o cache local
+dir.create("geo_cache", showWarnings = FALSE)
+gset <- getGEO("GSE16561", GSEMatrix = TRUE, destdir = "geo_cache")
 gset <- gset[[1]]
 
-# matriz de expressão
+# Expression matrix — detect scale and normalize
 expr <- exprs(gset)
-if (max(expr, na.rm = TRUE) > 30) { # FIX [P7]: detecta matriz aparentemente fora de escala log2 antes da normalizacao
-  message("Dados aparentemente não-log. Aplicando log2(x + 1).") # FIX [P7]: informa a transformacao log2 aplicada automaticamente
-  expr <- log2(expr + 1) # FIX [P7]: transforma a matriz para escala log2 quando necessario
-}
-expr <- normalizeBetweenArrays(expr, method = "quantile") # FIX [P7]: aplica normalizacao quantile entre arrays antes das analises subsequentes
-message("Normalização quantile aplicada.") # FIX [P7]: registra a aplicacao da normalizacao quantile
-# Diagnóstico pós-normalização
-cat(sprintf(
-  "Matriz: %d probes × %d amostras | min=%.2f | mediana=%.2f | max=%.2f\n",
-  nrow(expr), ncol(expr),
-  min(expr, na.rm=TRUE),
-  median(expr, na.rm=TRUE),
-  max(expr, na.rm=TRUE)
-))
-# FIX [P7-diag]: registra estatísticas da matriz normalizada para
-# confirmar que os dados estão em escala esperada (max tipicamente
-# entre 10-16 para Illumina BeadChip em log2)
 
-# metadados clínicos
+if (max(expr, na.rm = TRUE) > 30) {
+  message("Expression values appear to be on a linear scale. Applying log2(x + 1).")
+  expr <- log2(expr + 1)
+}
+
+expr <- normalizeBetweenArrays(expr, method = "quantile")
+message("Quantile normalization applied.")
+
+cat(sprintf(
+  "Matrix: %d probes × %d samples  |  min=%.2f  median=%.2f  max=%.2f\n",
+  nrow(expr), ncol(expr),
+  min(expr, na.rm = TRUE),
+  median(expr, na.rm = TRUE),
+  max(expr, na.rm = TRUE)
+))
+
+# Clinical metadata — classify samples as Stroke or Control
+# GSE16561 stores group labels in the 'description' column of the phenotype table
 meta <- pData(gset)
 
-# ver colunas disponíveis
-colnames(meta)
+if (!"description" %in% colnames(meta)) {
+  stop("Column 'description' not found in sample metadata. ",
+       "Check pData(gset) for the correct group label column.")
+}
 
-# visualizar conteúdo de algumas colunas
-head(meta)
-
-# no GSE16561 a condição geralmente está em "characteristics_ch1"
-table(meta$characteristics_ch1)
-
-# criar vetor de grupos a partir da coluna description
-if (!"description" %in% colnames(meta)) stop("Coluna 'description' ausente em meta.") # FIX [P6]: valida a presenca da coluna description antes da classificacao dos grupos
-grupo <- ifelse(grepl("Stroke", meta$description, ignore.case = TRUE),
-                "AVC",
-                ifelse(grepl("Control", meta$description, ignore.case = TRUE),
-                       "Controle",
-                       NA))
-
-# transformar em fator
+grupo <- ifelse(
+  grepl("Stroke",  meta$description, ignore.case = TRUE), "AVC",
+  ifelse(
+    grepl("Control", meta$description, ignore.case = TRUE), "Controle",
+    NA
+  )
+)
 grupo <- factor(grupo)
 
-# visualizar distribuição
-table(grupo)
+# Remove any samples that could not be assigned to a group
+unclassified <- is.na(grupo)
+if (any(unclassified)) {
+  cat("Removing", sum(unclassified), "sample(s) with no group assignment.\n")
+}
+expr  <- expr[, !unclassified]
+grupo <- droplevels(grupo[!unclassified])
 
-#remover amostras não classificadas
-validos <- !is.na(grupo)
-cat("Amostras removidas por grupo=NA:", sum(!validos), "\n") # FIX [P6]: reporta quantas amostras foram excluidas por nao receberem classificacao de grupo
+cat("Sample distribution:\n")
+print(table(grupo))
 
-expr <- expr[, validos]
-grupo <- droplevels(grupo[validos])
-cat("Distribuição final de grupos:\n"); print(table(grupo)) # FIX [P6]: mostra a distribuicao final dos grupos apos remover amostras NA
 
-#limma
+# =============================================================================
+# SECTION 2 — Differential Expression Analysis (limma)
+# =============================================================================
+# We fit a linear model for each probe with empirical Bayes moderation
+# (eBayes), which shrinks per-gene variance estimates toward a global prior —
+# particularly useful for microarray data with moderate sample sizes.
+# Contrast: AVC − Controle (positive logFC = higher in stroke).
+# Significance criteria: FDR (Benjamini-Hochberg) < 0.05, |logFC| > 1.
+# =============================================================================
+
 design <- model.matrix(~0 + grupo)
-colnames(design) <- c("AVC","Controle")
+colnames(design) <- c("AVC", "Controle")
 
-fit <- lmFit(expr, design)
-
+fit  <- lmFit(expr, design)
 contr <- makeContrasts(AVCvsControle = AVC - Controle, levels = design)
-
 fit2 <- contrasts.fit(fit, contr)
 fit2 <- eBayes(fit2)
 
-results <- topTable(fit2, number = 20)
+# Extract all significant DEGs (FDR < 0.05, no logFC filter yet — applied below)
+deg <- topTable(fit2, adjust = "fdr", p.value = 0.05, number = Inf)
 
-results
-
-deg <- topTable(fit2, adjust="fdr", p.value=0.05, number=Inf)
-
-anotar_genes <- function(deg, gset, col_symbol = NULL, col_title = NULL, colapsar = TRUE) {
-
-  anot <- fData(gset)
-
-  # garantir coluna de probe
+# Annotate probes with gene symbols using the platform's feature data.
+# When multiple probes map to the same gene, we keep the one with the
+# largest absolute logFC (most informative probe per gene).
+anotar_genes <- function(deg, gset, col_symbol = NULL, col_title = NULL,
+                         colapsar = TRUE) {
+  anot    <- fData(gset)
   deg$ProbeID <- rownames(deg)
 
-  # identificar automaticamente coluna de símbolo do gene se não informada
-  if(is.null(col_symbol)) {
-    gene_col <- grep("symbol", colnames(anot), ignore.case = TRUE, value = TRUE)[1]
+  gene_col <- if (!is.null(col_symbol)) {
+    col_symbol
   } else {
-    gene_col <- col_symbol
+    grep("symbol", colnames(anot), ignore.case = TRUE, value = TRUE)[1]
   }
 
-  # identificar coluna com título do gene (opcional)
-  if(!is.null(col_title)) {
-    if(col_title %in% colnames(anot)) {
-      title_col <- col_title
-    } else {
-      title_col <- NULL
-    }
+  title_col <- if (!is.null(col_title) && col_title %in% colnames(anot)) {
+    col_title
   } else {
-    title_col <- NULL
+    NULL
   }
 
-  # construir tabela de anotação
-  if(!is.null(title_col)) {
-    anot2 <- data.frame(
-      ProbeID = rownames(anot),
-      Gene = anot[[gene_col]],
-      GeneTitle = anot[[title_col]],
-      stringsAsFactors = FALSE
-    )
+  anot2 <- if (!is.null(title_col)) {
+    data.frame(ProbeID   = rownames(anot),
+               Gene      = anot[[gene_col]],
+               GeneTitle = anot[[title_col]],
+               stringsAsFactors = FALSE)
   } else {
-    anot2 <- data.frame(
-      ProbeID = rownames(anot),
-      Gene = anot[[gene_col]],
-      stringsAsFactors = FALSE
-    )
+    data.frame(ProbeID = rownames(anot),
+               Gene    = anot[[gene_col]],
+               stringsAsFactors = FALSE)
   }
 
-  # merge com resultados
-  deg_anotado <- merge(deg, anot2, by="ProbeID", all.x = TRUE)
+  deg_anotado <- merge(deg, anot2, by = "ProbeID", all.x = TRUE)
 
-  # colapsar probes duplicadas mantendo maior |logFC|
-  if(colapsar) {
-    deg_anotado <- deg_anotado[order(-abs(deg_anotado$logFC)), ]  # ordenar por logFC absoluto
-    deg_anotado <- deg_anotado[!duplicated(deg_anotado$Gene), ]   # manter apenas a primeira ocorrência de cada gene
+  if (colapsar) {
+    deg_anotado <- deg_anotado[order(-abs(deg_anotado$logFC)), ]
+    deg_anotado <- deg_anotado[!duplicated(deg_anotado$Gene), ]
   }
 
-  return(deg_anotado)
+  deg_anotado
 }
 
 deg_anotado <- anotar_genes(deg, gset)
-head(deg_anotado)
 
-if (interactive()) View(deg_anotado)
+cat(sprintf(
+  "DEGs: %d total  |  Up: %d  |  Down: %d\n",
+  nrow(deg_anotado),
+  sum(deg_anotado$logFC >  1, na.rm = TRUE),
+  sum(deg_anotado$logFC < -1, na.rm = TRUE)
+))
+
+
+# =============================================================================
+# SECTION 3 — Volcano Plot
+# =============================================================================
+# Visual summary of the differential expression results.
+# Blue = up-regulated in stroke; purple = down-regulated; grey = not significant.
+# Dashed lines mark the |logFC| > 1 and FDR < 0.05 thresholds.
+# =============================================================================
 
 library(ggplot2)
 library(ggrepel)
 
-# usar deg_anotado e criar coluna gene_symbol
-deg_plot <- deg_anotado
-deg_plot$gene_symbol <- deg_plot$Gene  # renomear para compatibilidade
-
-# Limiares
 lfc_cutoff <- 1
 fdr_cutoff <- 0.05
 
-# Classificar genes
+deg_plot <- deg_anotado
+deg_plot$gene_symbol  <- deg_plot$Gene
 deg_plot$volcano_class <- "NS"
 deg_plot$volcano_class[deg_plot$adj.P.Val < fdr_cutoff & deg_plot$logFC >  lfc_cutoff] <- "Up"
 deg_plot$volcano_class[deg_plot$adj.P.Val < fdr_cutoff & deg_plot$logFC < -lfc_cutoff] <- "Down"
 
-# Gráfico base
-p <- ggplot(
-  deg_plot,
-  aes(x = logFC, y = -log10(adj.P.Val), color = volcano_class)
-) +
-  geom_point(size = 2, alpha = 0.8) +
-  scale_color_manual(
-    values = c("Up"="blue", "Down"="purple", "NS"="grey70")
+p_volcano <- ggplot(
+    deg_plot,
+    aes(x = logFC, y = -log10(adj.P.Val), color = volcano_class)
   ) +
-  geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff), linetype="dashed", linewidth=0.4) +
-  geom_hline(yintercept = -log10(fdr_cutoff), linetype="dashed", linewidth=0.4) +
-  labs(title="VolcanoPlot - Stroke", x="log2 Fold Change", y="-log10(FDR)", color="Regulation") +
-  theme_classic(base_size=14)
-
-# Rotular apenas DEGs
-p_labeled <- p +
+  geom_point(size = 2, alpha = 0.8) +
+  scale_color_manual(values = c(Up = "blue", Down = "purple", NS = "grey70")) +
+  geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff),
+             linetype = "dashed", linewidth = 0.4) +
+  geom_hline(yintercept = -log10(fdr_cutoff),
+             linetype = "dashed", linewidth = 0.4) +
   geom_text_repel(
-    data = subset(deg_plot, volcano_class %in% c("Up","Down")),
-    aes(label=gene_symbol),
-    size=3.8,
-    max.overlaps=Inf,
-    box.padding=0.4,
-    point.padding=0.3,
-    segment.color="grey50"
-  )
+    data        = subset(deg_plot, volcano_class %in% c("Up", "Down")),
+    aes(label   = gene_symbol),
+    size        = 3.8,
+    max.overlaps = Inf,
+    box.padding = 0.4,
+    point.padding = 0.3,
+    segment.color = "grey50"
+  ) +
+  labs(
+    title = "Volcano Plot — Ischemic Stroke vs. Controls (GSE16561)",
+    x     = "log2 Fold Change",
+    y     = "-log10(FDR)",
+    color = "Regulation"
+  ) +
+  theme_classic(base_size = 14)
 
-print(p_labeled)
-ggsave("Volcano.png", plot=p_labeled, width=7, height=6, dpi=300)
+dir.create("outputs/figures", recursive = TRUE, showWarnings = FALSE)
+print(p_volcano)
+ggsave("outputs/figures/Volcano.png", plot = p_volcano,
+       width = 7, height = 6, dpi = 300)
 
+
+# =============================================================================
+# SECTION 4 — Protein-Protein Interaction Network (STRINGdb)
+# =============================================================================
+# We map all significant DEGs (both Up and Down) to STRING protein identifiers
+# and retrieve high-confidence interactions (combined_score >= 400).
+# The largest connected component of the resulting graph is plotted using a
+# Fruchterman-Reingold layout. Edge thickness reflects interaction confidence.
+# =============================================================================
 
 library(dplyr)
 library(STRINGdb)
 library(igraph)
 library(ggraph)
-library(ggplot2)
 
-# --- Preparar conjuntos de genes Up e Down ---
 lfc_cutoff <- 1
 fdr_cutoff <- 0.05
 
 deg_plot <- deg_anotado
-deg_plot$gene_symbol <- deg_plot$Gene  # renomeia para compatibilidade
-
+deg_plot$gene_symbol  <- deg_plot$Gene
 deg_plot$volcano_class <- "NS"
 deg_plot$volcano_class[deg_plot$adj.P.Val < fdr_cutoff & deg_plot$logFC >  lfc_cutoff] <- "Up"
 deg_plot$volcano_class[deg_plot$adj.P.Val < fdr_cutoff & deg_plot$logFC < -lfc_cutoff] <- "Down"
 
-up_genes   <- deg_plot %>% filter(volcano_class=="Up")   %>% pull(gene_symbol) %>% unique()
-down_genes <- deg_plot %>% filter(volcano_class=="Down") %>% pull(gene_symbol) %>% unique()
+up_genes   <- deg_plot %>% filter(volcano_class == "Up")   %>% pull(gene_symbol) %>% unique()
+down_genes <- deg_plot %>% filter(volcano_class == "Down") %>% pull(gene_symbol) %>% unique()
 deg_genes  <- sort(unique(c(up_genes, down_genes)))
 
 cat("Up genes:", length(up_genes), "\n")
 cat("Down genes:", length(down_genes), "\n")
-cat("Total DEGs (Up+Down):", length(deg_genes), "\n")
+cat("Total DEGs for PPI:", length(deg_genes), "\n")
 
-if(length(deg_genes) < 2) stop("Poucos DEGs para gerar PPI")
+if (length(deg_genes) < 2) stop("Too few DEGs to build a PPI network.")
 
-# --- Inicializar STRINGdb ---
-options(timeout = 600) # FIX [P12]: 600s é suficiente para downloads STRING; 300000s (83h) era excessivo.
-string_db <- STRINGdb$new(version="11.5", species=9606, score_threshold=400, input_directory="") # FIX [P11]: aplica o threshold de score diretamente na origem das interacoes STRING
+# score_threshold = 400 is STRING's recommended cutoff for medium-confidence
+# interactions. Increasing it (e.g., 700) gives a sparser but higher-quality graph.
+options(timeout = 600)
+string_db <- STRINGdb$new(
+  version         = "11.5",
+  species         = 9606,
+  score_threshold = 400,
+  input_directory = ""
+)
 
-# --- Criar tabela de nós com regulação ---
 node_annot <- data.frame(
   gene_symbol = deg_genes,
   regulation  = ifelse(deg_genes %in% up_genes, "Up", "Down"),
   stringsAsFactors = FALSE
 )
 
-# --- Mapear genes para STRING IDs ---
 mapped <- string_db$map(node_annot, "gene_symbol", removeUnmappedRows = TRUE)
-cat("Genes mapeados para STRING:", nrow(mapped), "de", nrow(node_annot), "\n")
+cat("Genes mapped to STRING:", nrow(mapped), "of", nrow(node_annot), "\n")
 
-if(nrow(mapped) < 2) stop("Menos de 2 genes mapeados no STRING; PPI impossível")
+if (nrow(mapped) < 2) stop("Fewer than 2 genes mapped to STRING; cannot build PPI.")
 
-# --- Recuperar interações PPI ---
-MAX_TENTATIVAS <- 3
+# Retrieve interactions with retry logic in case of transient network errors
+MAX_ATTEMPTS <- 3
 ppi_raw <- NULL
-for (tentativa in seq_len(MAX_TENTATIVAS)) {
+for (attempt in seq_len(MAX_ATTEMPTS)) {
   ppi_raw <- tryCatch(
     string_db$get_interactions(mapped$STRING_id),
     error = function(e) {
-      message("Tentativa ", tentativa, " falhou: ", conditionMessage(e))
-      Sys.sleep(10 * tentativa)
+      message("Attempt ", attempt, " failed: ", conditionMessage(e))
+      Sys.sleep(10 * attempt)
       NULL
     }
   )
   if (!is.null(ppi_raw)) break
 }
 if (is.null(ppi_raw)) {
-  stop("Download das interações PPI falhou após ", MAX_TENTATIVAS,
-       " tentativas. Verifique conexão ou tente novamente mais tarde.")
+  stop("PPI download failed after ", MAX_ATTEMPTS, " attempts. ",
+       "Check your internet connection or try again later.")
 }
-# FIX [N1/N4]: adiciona retry com backoff exponencial para downloads
-# instáveis do STRINGdb protein.links
 
-# Filtrar arestas apenas entre nossos genes e score alto
-score_cutoff <- 400
 ppi <- ppi_raw %>%
-  filter(from %in% mapped$STRING_id, to %in% mapped$STRING_id) # FIX [P11]: remove o filtro manual de score porque o threshold ja e aplicado pelo STRINGdb
+  filter(from %in% mapped$STRING_id, to %in% mapped$STRING_id)
 
-cat("Arestas após filtro (score >=", score_cutoff, "):", nrow(ppi), "\n")
-if(nrow(ppi)==0) stop("Nenhuma aresta após filtro; diminua score_cutoff")
+cat("Edges retained (score >= 400):", nrow(ppi), "\n")
+if (nrow(ppi) == 0) stop("No edges after filter. Consider lowering score_threshold.")
 
-# --- Construir grafo igraph ---
+# Build undirected weighted graph
 g <- graph_from_data_frame(
-  d = ppi %>% transmute(from, to, weight=combined_score),
+  d        = ppi %>% transmute(from, to, weight = combined_score),
   directed = FALSE,
-  vertices = mapped %>% transmute(name=STRING_id, gene_symbol=gene_symbol, regulation=regulation)
+  vertices = mapped %>% transmute(
+    name        = STRING_id,
+    gene_symbol = gene_symbol,
+    regulation  = regulation
+  )
 )
 
-# Manter apenas maior componente conexo
-components <- components(g)
-giant <- which.max(components$csize)
-g_cc <- induced_subgraph(g, vids=V(g)[components$membership==giant])
-if (vcount(g_cc) < 2) stop("Componente principal tem menos de 2 nós. Revise score_cutoff ou o conjunto de genes.") # FIX [P14]: interrompe quando a componente principal nao suporta a analise de rede
+# Keep only the largest connected component for clarity
+components_g <- components(g)
+giant_idx    <- which.max(components_g$csize)
+g_cc         <- induced_subgraph(g, vids = V(g)[components_g$membership == giant_idx])
 
-cat("Nodes (maior CC):", vcount(g_cc), "Edges:", ecount(g_cc), "\n")
+if (vcount(g_cc) < 2) {
+  stop("The largest connected component has fewer than 2 nodes. ",
+       "Try lowering score_threshold or broadening the DEG criteria.")
+}
 
-# --- Plotar rede PPI com ggraph ---
+cat("Largest connected component — nodes:", vcount(g_cc),
+    "  edges:", ecount(g_cc), "\n")
+
 set.seed(1)
-p_ppi <- ggraph(g_cc, layout="fr") +
-  geom_edge_link(aes(width=weight), alpha=0.25) +
-  scale_edge_width(range=c(0.2,2.2), guide="none") +
-  geom_node_point(aes(color=regulation), size=4) +
-  scale_color_manual(values=c(Up="blue", Down="purple")) +
-  geom_node_text(aes(label=gene_symbol), repel=TRUE, size=3.5) +
-  theme_void(base_size=14) +
+p_ppi <- ggraph(g_cc, layout = "fr") +
+  geom_edge_link(aes(width = weight), alpha = 0.25) +
+  scale_edge_width(range = c(0.2, 2.2), guide = "none") +
+  geom_node_point(aes(color = regulation), size = 4) +
+  scale_color_manual(values = c(Up = "blue", Down = "purple")) +
+  geom_node_text(aes(label = gene_symbol), repel = TRUE, size = 3.5) +
+  theme_void(base_size = 14) +
   theme(
-    plot.background = element_rect(fill="white", color=NA),
-    panel.background = element_rect(fill="white", color=NA)
+    plot.background  = element_rect(fill = "white", color = NA),
+    panel.background = element_rect(fill = "white", color = NA)
   ) +
-  ggtitle(paste0("Rede PPI STRING (score >=", score_cutoff, ")"))
+  ggtitle("STRING PPI Network — Ischemic Stroke DEGs (score ≥ 400)")
 
 print(p_ppi)
+ggsave("outputs/figures/PPI.png", plot = p_ppi,
+       width = 9, height = 7, dpi = 300, bg = "white")
 
-# --- Salvar PNG com fundo branco ---
-ggsave("PPI.png", plot=p_ppi, width=9, height=7, dpi=300, bg="white")
 
+# =============================================================================
+# SECTION 5 — STRING Functional Enrichment
+# =============================================================================
+# We run enrichment separately for Up-regulated and Down-regulated gene sets.
+# This matters biologically: the Up signature reflects innate immune activation
+# (neutrophil degranulation, cytokine signaling), while the Down signature
+# reflects post-stroke immunodepression (lymphocyte suppression, adaptive
+# immunity downregulation) — two distinct and clinically relevant processes.
+#
+# The full DEG set (not a top-N subset) is sent to STRING to avoid
+# artificially truncating the input signal.
+# =============================================================================
 
-##############################
-# Bibliotecas
-##############################
 suppressPackageStartupMessages({
   library(STRINGdb)
   library(dplyr)
   library(rio)
 })
 
-##############################
-# 1) Selecionar genes Up e Down filtrados por logFC e FDR # FIX [P15]: ajusta a descricao para refletir o uso de todos os DEGs filtrados
-##############################
 lfc_cutoff <- 1
-fdr_cutoff <- 0.05 # FIX [P15]: adiciona o limiar de FDR para enviar ao STRING todos os DEGs filtrados
+fdr_cutoff <- 0.05
 
 deg_filtered <- deg_anotado %>%
   filter(!is.na(Gene)) %>%
-  filter(abs(logFC) > lfc_cutoff, adj.P.Val < fdr_cutoff) %>% # FIX [P15]: mantem todos os DEGs significativos por logFC e FDR para o enriquecimento
+  filter(abs(logFC) > lfc_cutoff, adj.P.Val < fdr_cutoff) %>%
   mutate(regulation = ifelse(logFC > 0, "Up", "Down"))
 
-up_genes   <- deg_filtered %>% filter(regulation == "Up") %>% pull(Gene) # FIX [P15]: remove o corte artificial de top genes para usar toda a assinatura Up
-down_genes <- deg_filtered %>% filter(regulation == "Down") %>% pull(Gene) # FIX [P15]: remove o corte artificial de top genes para usar toda a assinatura Down
+up_genes   <- deg_filtered %>% filter(regulation == "Up")   %>% pull(Gene)
+down_genes <- deg_filtered %>% filter(regulation == "Down") %>% pull(Gene)
 
-cat("Up genes:", length(up_genes), "\n")
-cat("Down genes:", length(down_genes), "\n")
+cat("Genes sent to STRING enrichment:\n")
+cat("  Up:", length(up_genes), "\n")
+cat("  Down:", length(down_genes), "\n")
 
-##############################
-# 2) Inicializar STRINGdb
-##############################
-# FIX [N3]: reutiliza a instância STRINGdb já criada no bloco PPI.
-# O score_threshold=0 é intencional aqui: o enriquecimento STRING
-# usa todos os genes mapeados internamente — a filtragem de score
-# é aplicada pelo servidor, não pelo cliente.
-# Garante que string_db exista mesmo que o bloco PPI tenha falhado:
+# Reuse the STRING connection from the PPI section if it exists; otherwise
+# create a new one. For enrichment, the score threshold is handled server-side,
+# so we initialize with score_threshold = 0.
 if (!exists("string_db")) {
   string_db <- STRINGdb$new(
-    version = "11.5",
-    species = 9606,
+    version         = "11.5",
+    species         = 9606,
     score_threshold = 0,
     input_directory = ""
   )
-  message("STRINGdb reinicializado para enriquecimento.")
+  message("STRINGdb connection initialized for enrichment.")
 }
 
-##############################
-# 3) Função de mapeamento robusto para STRING
-##############################
+# Maps a vector of gene symbols to STRING protein identifiers.
+# Returns only rows that could be mapped (unmapped genes are dropped).
 symbols_to_string_map <- function(symbols, regulation_label, string_db) {
   df <- data.frame(
     gene_symbol = unique(as.character(symbols)),
@@ -378,161 +433,228 @@ symbols_to_string_map <- function(symbols, regulation_label, string_db) {
     stringsAsFactors = FALSE
   )
   df <- df[!is.na(df$gene_symbol) & df$gene_symbol != "", , drop = FALSE]
-
   if (nrow(df) == 0) return(data.frame())
 
   mapped <- string_db$map(df, "gene_symbol", removeUnmappedRows = TRUE)
 
-  if (!("STRING_id" %in% colnames(mapped))) {
-    stop("STRINGdb$map() did not return a STRING_id column. Columns: ",
+  if (!"STRING_id" %in% colnames(mapped)) {
+    stop("STRINGdb$map() did not return a STRING_id column. Columns found: ",
          paste(colnames(mapped), collapse = ", "))
   }
 
   mapped
 }
 
-##############################
-# 4) Função de enriquecimento STRING
-##############################
+# Runs STRING enrichment for a gene set and annotates the result with
+# metadata about how many genes were submitted and successfully mapped.
 run_string_enrichment <- function(symbols, label, string_db) {
-
   mapped <- symbols_to_string_map(symbols, label, string_db)
-  # FIX [P15]: a selecao deve ocorrer nos termos enriquecidos apos o teste, nao nos genes de entrada enviados ao STRING
 
-  cat(label, "- input symbols:", length(unique(symbols)), "\n")
-  cat(label, "- mapped proteins:", nrow(mapped), "\n")
+  cat(label, "— submitted:", length(unique(symbols)),
+      "  mapped:", nrow(mapped), "\n")
 
   if (nrow(mapped) < 2) {
-    warning(label, ": <2 mapped proteins; enrichment not meaningful.")
+    warning(label, ": fewer than 2 proteins mapped; enrichment is not meaningful.")
     return(list(mapped = mapped, enrich = data.frame()))
   }
 
-  enr <- string_db$get_enrichment(mapped$STRING_id)
-  enr <- as.data.frame(enr)
-
-  enr$set_label        <- label
-  enr$n_input_symbols  <- length(unique(symbols))
+  enr <- as.data.frame(string_db$get_enrichment(mapped$STRING_id))
+  enr$set_label         <- label
+  enr$n_input_symbols   <- length(unique(symbols))
   enr$n_mapped_proteins <- nrow(mapped)
 
   list(mapped = mapped, enrich = enr)
 }
 
-##############################
-# 5) Executar para Up e Down
-##############################
 res_up   <- run_string_enrichment(up_genes,   "Up",   string_db)
 res_down <- run_string_enrichment(down_genes, "Down", string_db)
 
 enr_up   <- res_up$enrich
 enr_down <- res_down$enrich
 
-##############################
-# 6) Inspeção rápida
-##############################
-cat("\n--- Top 20 termos Up ---\n"); print(head(enr_up, 20)) # FIX [P16]: substitui View por saida compativel com execucao via Rscript
-cat("\n--- Top 20 termos Down ---\n"); print(head(enr_down, 20)) # FIX [P16]: substitui View por saida compativel com execucao via Rscript
+cat("\n--- Top 20 enriched terms (Up) ---\n")
+print(head(enr_up,   20))
+cat("\n--- Top 20 enriched terms (Down) ---\n")
+print(head(enr_down, 20))
 
-#down só tem um
-mapped_down <- symbols_to_string_map(down_genes, "Down", string_db)
-cat("Down genes mapeados no STRING:", nrow(mapped_down), "\n")
-print(mapped_down)
-
-##############################
-# 7) Exportar resultados
-##############################
+# Export mapping tables and full enrichment results
 dir.create("string_enrichment", showWarnings = FALSE)
 rio::export(res_up$mapped,   "string_enrichment/STRING_mapping_Up.tsv")
 rio::export(res_down$mapped, "string_enrichment/STRING_mapping_Down.tsv")
-rio::export(enr_up,   "string_enrichment/STRING_enrichment_Up_all.tsv")
-rio::export(enr_down, "string_enrichment/STRING_enrichment_Down_all.tsv") # FIX [P17]: exporta tambem o enriquecimento completo dos genes Down
+rio::export(enr_up,          "string_enrichment/STRING_enrichment_Up_all.tsv")
+rio::export(enr_down,        "string_enrichment/STRING_enrichment_Down_all.tsv")
 
-##############################
-# 8) Salvar workspace
-##############################
-dir.create("rds", showWarnings = FALSE) # FIX [P18]: cria o diretorio para persistir objetos essenciais em formato RDS
-saveRDS(deg_anotado, "rds/deg_anotado.rds") # FIX [P18]: salva a tabela anotada de DEGs em arquivo RDS
-saveRDS(enr_up,      "rds/enr_up.rds") # FIX [P18]: salva o enriquecimento Up em arquivo RDS
-saveRDS(enr_down,    "rds/enr_down.rds") # FIX [P18]: salva o enriquecimento Down em arquivo RDS
+# Persist key R objects for downstream use or resuming the session
+dir.create("rds", showWarnings = FALSE)
+saveRDS(deg_anotado, "rds/deg_anotado.rds")
+saveRDS(enr_up,      "rds/enr_up.rds")
+saveRDS(enr_down,    "rds/enr_down.rds")
 rio::export(deg_anotado, "string_enrichment/DEGs_anotados.tsv")
-message("deg_anotado exportado em string_enrichment/DEGs_anotados.tsv")
+message("Full annotated DEG table saved to string_enrichment/DEGs_anotados.tsv")
+
+# The PPI graph object is saved conditionally — it may not exist if the
+# PPI section encountered a network error
 if (exists("g_cc")) {
   saveRDS(g_cc, "rds/ppi_graph_cc.rds")
-  message("g_cc salvo em rds/ppi_graph_cc.rds")
+  message("PPI graph saved to rds/ppi_graph_cc.rds")
 } else {
-  warning("g_cc não existe (PPI falhou?). Arquivo rds/ppi_graph_cc.rds não gerado.")
+  warning("PPI graph (g_cc) not found — the PPI section may not have completed. ",
+          "rds/ppi_graph_cc.rds was not generated.")
 }
-# FIX [N5]: torna o saveRDS de g_cc condicional para evitar erro
-# quando o bloco PPI não completou
+
 gc()
 
 
-######dotplot
+# =============================================================================
+# SECTION 6 — Enrichment Dotplots
+# =============================================================================
+# Dotplots visualize the top enriched biological terms ranked by significance.
+# Only functional annotation categories are shown — PMID entries (literature
+# co-citations returned by STRING) are explicitly excluded, as their
+# 'description' field contains paper titles, not biological process names.
+# =============================================================================
+
 library(ggplot2)
 library(dplyr)
 library(stringr)
+library(grid)
 
-plot_string_enrichment_dotplot <- function(enr_df, top_n = 50, title = "Enrichment Dotplot") {
+# Categories that contain genuine biological annotations.
+# "PMID", "NetworkNeighborAL", and "TISSUES" are excluded.
+BIOLOGICAL_CATEGORIES <- c(
+  "Process", "Component", "Function",
+  "Keyword", "COMPARTMENTS", "RCTM",
+  "InterPro", "SMART", "HPO", "Pfam"
+)
 
-  if(nrow(enr_df) == 0){
-    warning("Dataframe de enriquecimento vazio.")
+# Builds a dotplot of the top enriched terms.
+# Point size = number of genes in the term; color = -log10(FDR).
+plot_string_enrichment_dotplot <- function(enr_df, top_n = 50,
+                                           title = "Enrichment Dotplot") {
+  if (nrow(enr_df) == 0) {
+    warning("Enrichment data frame is empty.")
     return(NULL)
   }
 
-  # Seleciona top N termos pelo FDR (menor primeiro)
+  enr_df <- enr_df %>% filter(category %in% BIOLOGICAL_CATEGORIES)
+
+  if (nrow(enr_df) == 0) {
+    warning("No terms from biological annotation categories found after filtering.")
+    return(NULL)
+  }
+
   top_terms <- enr_df %>%
     arrange(fdr) %>%
-    slice(1:top_n) %>%
+    slice_head(n = min(top_n, nrow(enr_df))) %>%
     mutate(
-      description_wrapped = str_wrap(description, width = 40),
-      # criar fator único usando ordem pelo FDR
-      description_factor = factor(description_wrapped, levels = rev(unique(description_wrapped)))
+      description_wrapped = str_wrap(description, width = 65),
+      description_factor  = factor(
+        description_wrapped,
+        levels = rev(unique(description_wrapped))
+      )
     )
 
-  # Dotplot
-  p <- ggplot(top_terms, aes(
-    x = -log10(fdr),
-    y = description_factor,
-    size = number_of_genes,
+  ggplot(top_terms, aes(
+    x     = -log10(fdr),
+    y     = description_factor,
+    size  = number_of_genes,
     color = -log10(fdr)
   )) +
     geom_point(alpha = 0.9) +
     scale_color_gradient(low = "#74add1", high = "#d73027") +
+    guides(
+      size  = guide_legend(order = 1, override.aes = list(alpha = 1)),
+      color = guide_colorbar(order = 2)
+    ) +
     labs(
-      x = "-log10(FDR)",
-      y = "Biological Process / Term",
+      x     = "-log10(FDR)",
+      y     = "Biological Process / Term",
       title = title,
-      size = "Genes associados",
+      size  = "Genes in term",
       color = "-log10(FDR)"
     ) +
-    theme_bw(base_size = 13)
-
-  return(p)
+    theme_bw(base_size = 13) +
+    theme(
+      axis.text.y      = element_text(size = 8, lineheight = 0.9),
+      legend.position  = "right",
+      legend.box       = "vertical",
+      legend.spacing.y = unit(0.35, "cm"),
+      plot.margin      = margin(t = 10, r = 18, b = 10, l = 14)
+    )
 }
 
-# Uso para seu enr_up
-dotplot_up <- plot_string_enrichment_dotplot(enr_up, top_n = 50, title = "STRING Enrichment - Genes Up")
-print(dotplot_up)
-ggsave("dotplot_up_STRING.png", plot = dotplot_up, width = 10, height = 10, dpi = 300)
+# Computes a sensible figure height (inches) based on how many terms will
+# be plotted and their wrapped label lengths.
+compute_dotplot_height <- function(enr_df, top_n = 50) {
+  enr_df  <- enr_df %>% filter(category %in% BIOLOGICAL_CATEGORIES)
+  n_terms <- min(top_n, nrow(enr_df))
+  if (n_terms == 0) return(10)
 
-dotplot_down <- plot_string_enrichment_dotplot(enr_down, top_n = 50, title = "STRING Enrichment - Genes Down")
+  n_lines <- enr_df %>%
+    arrange(fdr) %>%
+    slice_head(n = n_terms) %>%
+    mutate(description_wrapped = str_wrap(description, width = 65)) %>%
+    pull(description_wrapped) %>%
+    str_count("\n") + 1
+
+  max(10, min(28, 4 + (0.18 * sum(n_lines))))
+}
+
+dotplot_up <- plot_string_enrichment_dotplot(
+  enr_up,
+  top_n = 50,
+  title = "STRING Enrichment — Up-regulated Genes (Ischemic Stroke)"
+)
+print(dotplot_up)
+ggsave(
+  "outputs/figures/dotplot_up_STRING.png",
+  plot   = dotplot_up,
+  width  = 15,
+  height = compute_dotplot_height(enr_up, top_n = 50),
+  dpi    = 300,
+  bg     = "white"
+)
+
+dotplot_down <- plot_string_enrichment_dotplot(
+  enr_down,
+  top_n = 50,
+  title = "STRING Enrichment — Down-regulated Genes (Ischemic Stroke)"
+)
 if (!is.null(dotplot_down)) {
   print(dotplot_down)
-  ggsave("dotplot_down_STRING.png", plot = dotplot_down, width = 10, height = 10, dpi = 300)
+  ggsave(
+    "outputs/figures/dotplot_down_STRING.png",
+    plot   = dotplot_down,
+    width  = 15,
+    height = compute_dotplot_height(enr_down, top_n = 50),
+    dpi    = 300,
+    bg     = "white"
+  )
 }
 
-###########################
-#segunda etapa
+
+# =============================================================================
+# SECTION 7 — Import NANDA-I Mapping Results (post-notebook)
+# =============================================================================
+# This section is run AFTER clinicalbert_vias_AVC.ipynb has been executed.
+# It reads the NANDA-I mapping CSVs generated by the notebook for any
+# further R-side analysis or custom visualization.
+# =============================================================================
 
 library(dplyr)
 library(ggplot2)
 
-# Ler resultados
-top5 <- read.csv('top5_condicoes_por_via.csv', fileEncoding = 'UTF-8')
+nanda_mapping <- read.csv(
+  "outputs/nanda/nanda_mapping_completo_threshold65.csv",
+  fileEncoding = "UTF-8"
+)
 
-# Ver resultado
-print(top5)
+cat("NANDA-I valid pairs (similarity >= 0.65):", nrow(nanda_mapping), "\n")
+print(nanda_mapping)
 
-# Heatmap no R (opcional — o PNG já foi gerado aqui)
-matriz <- read.csv('matriz_similaridade_completa.csv',
-                   row.names = 1,
-                   fileEncoding = 'UTF-8')
+# Full cosine similarity matrix (Up genes vs NANDA-I)
+matriz_up <- read.csv(
+  "outputs/nanda/matriz_similaridade_up_nanda.csv",
+  row.names    = 1,
+  fileEncoding = "UTF-8"
+)
