@@ -298,14 +298,43 @@ string_db <- STRINGdb$new(
   input_directory = ""
 )
 
+# Normalise gene symbols before mapping: convert to upper case, strip
+# surrounding whitespace, and drop blank or missing entries.
+deg_genes_norm <- toupper(trimws(deg_genes))
+deg_genes_norm <- deg_genes_norm[!is.na(deg_genes_norm) & deg_genes_norm != ""]
+deg_genes_norm <- unique(deg_genes_norm)
+
 node_annot <- data.frame(
-  gene_symbol = deg_genes,
-  regulation  = ifelse(deg_genes %in% up_genes, "Up", "Down"),
+  gene_symbol = deg_genes_norm,
+  regulation  = ifelse(deg_genes_norm %in% toupper(trimws(up_genes)), "Up", "Down"),
   stringsAsFactors = FALSE
 )
 
 mapped <- string_db$map(node_annot, "gene_symbol", removeUnmappedRows = TRUE)
-cat("Genes mapped to STRING:", nrow(mapped), "of", nrow(node_annot), "\n")
+
+# ── Mapping diagnostics (PPI) ─────────────────────────────────────────────────
+n_submitted_ppi  <- nrow(node_annot)
+n_mapped_ppi     <- nrow(mapped)
+mapping_rate_ppi <- if (n_submitted_ppi > 0) 100 * n_mapped_ppi / n_submitted_ppi else 0
+cat("--- STRING mapping diagnostics (PPI) ---\n")
+cat("Submitted:", n_submitted_ppi, "\n")
+cat("Mapped:   ", n_mapped_ppi, "\n")
+cat(sprintf("Rate:      %.1f%%\n", mapping_rate_ppi))
+cat("Unmapped (first 20):",
+    head(setdiff(toupper(node_annot$gene_symbol), toupper(mapped$gene_symbol)), 20), "\n")
+
+if (mapping_rate_ppi < 5) {
+  warning(sprintf(
+    "PPI mapping rate is very low (%.1f%%). Possible causes:\n", mapping_rate_ppi),
+    "  * Gene symbols may be outdated aliases not recognised by STRING v11.5\n",
+    "  * There may be a mismatch between the STRING database version and the\n",
+    "    gene nomenclature used in the microarray annotation file\n",
+    "Suggested action: paste the unmapped symbols listed above into\n",
+    "  https://string-db.org and check which identifiers STRING accepts."
+  )
+}
+
+cat("Genes mapped to STRING:", n_mapped_ppi, "of", n_submitted_ppi, "\n")
 
 if (nrow(mapped) < 2) stop("Fewer than 2 genes mapped to STRING; cannot build PPI.")
 
@@ -427,12 +456,16 @@ if (!exists("string_db")) {
 # Maps a vector of gene symbols to STRING protein identifiers.
 # Returns only rows that could be mapped (unmapped genes are dropped).
 symbols_to_string_map <- function(symbols, regulation_label, string_db) {
+  # Normalise gene symbols: convert to upper case, strip surrounding
+  # whitespace, and drop blank or missing entries before mapping.
+  symbols_norm <- toupper(trimws(as.character(symbols)))
+  symbols_norm <- symbols_norm[!is.na(symbols_norm) & symbols_norm != ""]
+
   df <- data.frame(
-    gene_symbol = unique(as.character(symbols)),
+    gene_symbol = unique(symbols_norm),
     regulation  = regulation_label,
     stringsAsFactors = FALSE
   )
-  df <- df[!is.na(df$gene_symbol) & df$gene_symbol != "", , drop = FALSE]
   if (nrow(df) == 0) return(data.frame())
 
   mapped <- string_db$map(df, "gene_symbol", removeUnmappedRows = TRUE)
@@ -440,6 +473,30 @@ symbols_to_string_map <- function(symbols, regulation_label, string_db) {
   if (!"STRING_id" %in% colnames(mapped)) {
     stop("STRINGdb$map() did not return a STRING_id column. Columns found: ",
          paste(colnames(mapped), collapse = ", "))
+  }
+
+  # ── Mapping diagnostics ────────────────────────────────────────────────────
+  n_submitted  <- nrow(df)
+  n_mapped     <- nrow(mapped)
+  mapping_rate <- if (n_submitted > 0) 100 * n_mapped / n_submitted else 0
+  cat(sprintf("--- STRING mapping diagnostics (%s) ---\n", regulation_label))
+  cat("Submitted:", n_submitted, "\n")
+  cat("Mapped:   ", n_mapped, "\n")
+  cat(sprintf("Rate:      %.1f%%\n", mapping_rate))
+  cat("Unmapped (first 20):",
+      head(setdiff(toupper(df$gene_symbol), toupper(mapped$gene_symbol)), 20),
+      "\n")
+
+  if (mapping_rate < 5) {
+    warning(sprintf(
+      "%s mapping rate is very low (%.1f%%). Possible causes:\n",
+      regulation_label, mapping_rate),
+      "  * Gene symbols may be outdated aliases not recognised by STRING v11.5\n",
+      "  * There may be a mismatch between the STRING database version and the\n",
+      "    gene nomenclature used in the microarray annotation file\n",
+      "Suggested action: paste the unmapped symbols listed above into\n",
+      "  https://string-db.org and check which identifiers STRING accepts."
+    )
   }
 
   mapped
@@ -658,3 +715,83 @@ matriz_up <- read.csv(
   row.names    = 1,
   fileEncoding = "UTF-8"
 )
+
+# Full cosine similarity matrix (Down genes vs NANDA-I)
+matriz_down <- read.csv(
+  "outputs/nanda/matriz_similaridade_down_nanda.csv",
+  row.names    = 1,
+  fileEncoding = "UTF-8"
+)
+
+# ── Summary statistics ────────────────────────────────────────────────────────
+n_up   <- sum(nanda_mapping$regulacao == "Up",   na.rm = TRUE)
+n_down <- sum(nanda_mapping$regulacao == "Down", na.rm = TRUE)
+
+cat("\n--- NANDA-I Mapping Summary ---\n")
+cat(sprintf(
+  "Valid pairs (similarity >= 0.65)  Up: %d  |  Down: %d  |  Total: %d\n",
+  n_up, n_down, nrow(nanda_mapping)
+))
+
+cat("\nTop 5 pairs by cosine similarity:\n")
+top5 <- nanda_mapping %>%
+  arrange(desc(similaridade)) %>%
+  slice_head(n = 5)
+print(top5)
+
+cat("\nPairs per NANDA-I diagnosis (both directions):\n")
+dist_diag <- nanda_mapping %>%
+  count(diagnostico_nanda, name = "n_pares") %>%
+  arrange(desc(n_pares))
+print(dist_diag)
+
+# ── Barplot: valid pairs per NANDA-I diagnosis, coloured by regulation ────────
+# Counts how many pathway–diagnosis pairs each NANDA-I code accumulated, split
+# by regulatory direction, to highlight which diagnoses are most supported by
+# the transcriptomic evidence.
+plot_data <- nanda_mapping %>%
+  count(diagnostico_nanda, regulacao, name = "n_pares")
+
+# Order diagnoses on the y-axis by their total count across both directions
+order_diag <- nanda_mapping %>%
+  count(diagnostico_nanda, name = "total") %>%
+  arrange(total) %>%
+  pull(diagnostico_nanda)
+
+plot_data <- plot_data %>%
+  mutate(
+    diagnostico_nanda = factor(diagnostico_nanda, levels = order_diag),
+    regulacao         = factor(regulacao, levels = c("Up", "Down"))
+  )
+
+p_bar <- ggplot(
+    plot_data,
+    aes(x = n_pares, y = diagnostico_nanda, fill = regulacao)
+  ) +
+  geom_col(position = "dodge", width = 0.7) +
+  scale_fill_manual(values = c(Up = "blue", Down = "purple")) +
+  labs(
+    title = "Valid Pathway\u2013NANDA-I Pairs per Diagnosis (similarity \u2265 0.65)",
+    x     = "Number of valid pairs",
+    y     = "NANDA-I Diagnosis",
+    fill  = "Regulation"
+  ) +
+  theme_bw(base_size = 13) +
+  theme(
+    axis.text.y     = element_text(size = 9),
+    legend.position = "right"
+  )
+
+print(p_bar)
+ggsave(
+  "outputs/figures/barplot_nanda_summary.png",
+  plot   = p_bar,
+  width  = 10,
+  height = 6,
+  dpi    = 300,
+  bg     = "white"
+)
+
+message("\n=== Pipeline complete ===")
+message("All outputs saved to outputs/figures/ and outputs/nanda/")
+message("Next step: review outputs/nanda/nanda_mapping_completo_threshold65.csv")

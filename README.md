@@ -1,5 +1,7 @@
 # Transcriptomics-to-Bedside: Mapping Ischemic Stroke Biology to NANDA-I Nursing Diagnoses via ClinicalBERT
 
+[![Check Environment](https://github.com/Patricio-sketch/AVC_transcriptomics/actions/workflows/check-environment.yml/badge.svg)](https://github.com/Patricio-sketch/AVC_transcriptomics/actions/workflows/check-environment.yml)
+
 A translational bioinformatics pipeline that bridges peripheral blood gene expression in ischemic stroke patients with standardized nursing diagnoses (NANDA-I taxonomy) through semantic similarity computed by a clinical language model (ClinicalBERT).
 
 ---
@@ -125,7 +127,8 @@ AVC_transcriptomics/
 ├── script.R                          # Main R pipeline (DEG → STRING → Dotplots)
 ├── configurar_ambiente.R             # One-time package installation
 ├── clinicalbert_vias_AVC.ipynb      # ClinicalBERT semantic mapping notebook
-├── _apply_notebook_corrections.ps1  # Legacy notebook patching utility
+├── legacy/
+│   └── _apply_notebook_corrections.ps1  # Legacy notebook patching utility
 │
 ├── outputs/
 │   ├── figures/                      # All generated visualizations
@@ -174,12 +177,29 @@ source("configurar_ambiente.R")
 
 Packages installed: `GEOquery`, `limma`, `STRINGdb`, `ggplot2`, `ggrepel`, `dplyr`, `igraph`, `ggraph`, `rio`, `stringr`, `rstudioapi`
 
+#### Reproducible environments (optional)
+
+To pin exact package versions, run `renv::snapshot()` after
+`configurar_ambiente.R`. Commit the generated `renv.lock` to reproduce the
+exact environment on any machine:
+
+```r
+if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
+renv::init(bare = TRUE)
+renv::snapshot()
+```
+
 ### Python (notebook)
 
-Python ≥ 3.9. Install dependencies:
+Python ≥ 3.9. Install all dependencies:
 
 ```bash
-pip install sentence-transformers transformers torch pandas numpy scikit-learn seaborn matplotlib
+# Option A — pip
+pip install -r requirements.txt
+
+# Option B — Conda
+conda env create -f environment.yml
+conda activate avc_transcriptomics
 ```
 
 The notebook is designed to run in **Google Colab** or **locally** (Jupyter). The ClinicalBERT model (`medicalai/ClinicalBERT`, ~400 MB) is downloaded automatically from HuggingFace on first run.

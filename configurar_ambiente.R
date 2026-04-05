@@ -53,3 +53,12 @@ if (length(failed) > 0) {
 
 message("All packages installed successfully: ", paste(packages, collapse = ", "))
 message("You can now run script.R.")
+
+# ── Optional: snapshot environment with renv ──────────────────────────────────
+# Uncomment the lines below to record exact package versions for reproducibility.
+# Run once after all packages are confirmed working.
+#
+# if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
+# renv::init(bare = TRUE)
+# renv::snapshot()
+# message("renv.lock created. Commit renv.lock and renv/ to version control.")

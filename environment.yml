@@ -1,0 +1,16 @@
+name: avc_transcriptomics
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch>=2.2.0
+  - pandas>=2.1.0
+  - numpy>=1.26.0
+  - scikit-learn>=1.4.0
+  - seaborn>=0.13.0
+  - matplotlib>=3.8.0
+  - pip
+  - pip:
+      - sentence-transformers>=2.7.0
+      - transformers>=4.40.0
