@@ -1,26 +1,141 @@
-# R
-.Rhistory
-.RData
-.Ruserdata
-*.Rproj.user
-workspace_*.RData
+# =============================================================================
+# .gitignore — AVC Transcriptomics
+# Política de versionamento descrita ao final deste arquivo.
+# =============================================================================
 
-# Python / Jupyter
+
+# -----------------------------------------------------------------------------
+# Dados brutos e cache (não versionados — arquivos grandes baixados sob demanda)
+# -----------------------------------------------------------------------------
+# Diretório completo do GEOquery: arquivos .soft.gz, _series_matrix.txt.gz, etc.
+geo_cache/
+
+
+# -----------------------------------------------------------------------------
+# Outputs gerados (reproduzíveis pela pipeline — não versionados)
+# -----------------------------------------------------------------------------
+# Toda a pasta outputs/ é ignorada, com exceção do modelo fine-tunado abaixo.
+outputs/
+
+# O modelo SBERT fine-tunado NÃO é ignorado: representa treinamento custoso
+# (requer GPU) e não é facilmente reproduzível sem os mesmos hiperparâmetros,
+# dados de treino e hardware. Portanto é versionado explicitamente.
+!outputs/sbert_nanda_finetuned/
+!outputs/sbert_nanda_finetuned/**
+
+
+# -----------------------------------------------------------------------------
+# Modelos e checkpoints HuggingFace (cache local ao projeto)
+# -----------------------------------------------------------------------------
+model_cache/
+hf_cache/
+# Diretórios checkpoint-N/ criados automaticamente durante model.fit() / Trainer
+checkpoint-*/
+# Pasta checkpoints/ local (atualmente vazia, mas criada pela pipeline)
+# Descomente a linha abaixo se quiser ignorar os checkpoints intermediários:
+# checkpoints/
+
+
+# -----------------------------------------------------------------------------
+# Segredos e credenciais (NUNCA versionar)
+# -----------------------------------------------------------------------------
+.env
+.env.*
+secrets.py
+hf_token.txt
+*_token.txt
+*_secret.txt
+
+# ATENÇÃO: o notebook clinicalbert_vias_AVC.ipynb pode conter o campo HF_TOKEN
+# em células de código ou metadados. Antes de qualquer commit, verifique e limpe
+# manualmente esse campo (ou use `jupyter nbconvert --clear-output` como
+# precaução). O notebook em si não pode ser ignorado, pois é parte central do
+# projeto.
+
+
+# -----------------------------------------------------------------------------
+# Jupyter
+# -----------------------------------------------------------------------------
 .ipynb_checkpoints/
 __pycache__/
 *.py[cod]
+*.pyo
+
+
+# -----------------------------------------------------------------------------
+# R
+# -----------------------------------------------------------------------------
+.Rhistory
+.RData
+.Ruserdata
+workspace_*.RData
+# Arquivos de projeto RStudio (descomente se o .Rproj for gerado acidentalmente)
+# *.Rproj
+.Rproj.user/
+# Biblioteca gerenciada pelo renv (caso seja adotado futuramente)
+renv/library/
+renv/.cache/
+
+
+# -----------------------------------------------------------------------------
+# Ambientes virtuais Python
+# -----------------------------------------------------------------------------
 .venv/
 venv/
 env/
 
-# OS / editor
+
+# -----------------------------------------------------------------------------
+# Sistema operacional
+# -----------------------------------------------------------------------------
 .DS_Store
 Thumbs.db
+desktop.ini
+ehthumbs.db
+
+
+# -----------------------------------------------------------------------------
+# Editores e IDEs
+# -----------------------------------------------------------------------------
 .vscode/
 .idea/
+*.swp
+*.swo
+*~
 
-# Hugging Face / model cache (local runs)
+
+# -----------------------------------------------------------------------------
+# Cache HuggingFace global (referência — a pasta real fica em ~/.cache)
+# -----------------------------------------------------------------------------
+# ~/.cache/huggingface/ é gerenciada pelo SO e não aparece aqui, mas qualquer
+# cópia local é coberta pelas regras model_cache/ e hf_cache/ acima.
 .cache/
 
-# Local GEO download cache
-geo_cache/
+
+# -----------------------------------------------------------------------------
+# String enrichment — INCLUÍDO no versionamento (não ignorado)
+# -----------------------------------------------------------------------------
+# Os arquivos em string_enrichment/*.tsv são outputs do R pequenos e essenciais
+# para rastreabilidade da análise; portanto NÃO há regra de ignore para eles.
+# Se o diretório pai fosse ignorado, a negação seria: !string_enrichment/
+# Situação atual: string_enrichment/ está livre de qualquer regra de ignore.
+
+
+# =============================================================================
+# POLÍTICA DE VERSIONAMENTO DO PROJETO
+# =============================================================================
+# 1. CÓDIGO E CONFIGURAÇÃO: todos os scripts (.R, .py, .ipynb), arquivos de
+#    ambiente (environment.yml, requirements.txt) e workflows CI são sempre
+#    versionados — representam a lógica reproduzível do projeto.
+# 2. DADOS BRUTOS: arquivos GEO (geo_cache/) são baixados sob demanda pelo
+#    GEOquery e não são versionados; o ID do dataset (GSE16561) é suficiente
+#    para reprodução.
+# 3. OUTPUTS INTERMEDIÁRIOS: figuras, CSVs e RDS gerados pela pipeline ficam
+#    fora do git; qualquer colaborador pode regenerá-los rodando script.R e os
+#    notebooks na ordem documentada no README.
+# 4. MODELO FINE-TUNADO: outputs/sbert_nanda_finetuned/ é versionado via Git
+#    LFS (recomendado para o .safetensors de ~418 MB) por ser difícil de
+#    reproduzir sem GPU e por representar um artefato de pesquisa único.
+# 5. SEGREDOS: tokens HuggingFace e credenciais jamais entram no histórico git;
+#    use variáveis de ambiente ou um arquivo .env local (listado neste arquivo).
+# =============================================================================
