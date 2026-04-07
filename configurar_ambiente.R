@@ -54,11 +54,15 @@ if (length(failed) > 0) {
 message("All packages installed successfully: ", paste(packages, collapse = ", "))
 message("You can now run script.R.")
 
-# ── Optional: snapshot environment with renv ──────────────────────────────────
-# Uncomment the lines below to record exact package versions for reproducibility.
-# Run once after all packages are confirmed working.
-#
-# if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
-# renv::init(bare = TRUE)
-# renv::snapshot()
-# message("renv.lock created. Commit renv.lock and renv/ to version control.")
+# ── Snapshot environment with renv for reproducibility ───────────────────────
+# This records exact package versions to renv.lock so any collaborator or
+# CI runner can restore the identical environment with `renv::restore()`.
+if (!requireNamespace("renv", quietly = TRUE)) install.packages("renv")
+# init(bare=TRUE) sets up renv without installing packages again
+if (!file.exists("renv.lock")) {
+  renv::init(bare = TRUE)
+  renv::snapshot(prompt = FALSE)
+  message("renv.lock created. Commit renv.lock to version control.")
+} else {
+  message("renv.lock already exists. Run renv::snapshot() to update after package changes.")
+}

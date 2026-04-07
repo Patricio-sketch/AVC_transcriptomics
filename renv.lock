@@ -1,0 +1,99 @@
+{
+  "R": {
+    "Version": "4.4.0",
+    "Repositories": [
+      {
+        "Name": "Bioconductor",
+        "URL": "https://bioconductor.org/packages/3.19/bioc"
+      },
+      {
+        "Name": "CRAN",
+        "URL": "https://cloud.r-project.org"
+      }
+    ]
+  },
+  "Packages": {
+    "BiocManager": {
+      "Package": "BiocManager",
+      "Version": "1.30.23",
+      "Source": "CRAN",
+      "Repository": "CRAN",
+      "Hash": "55c4d7b2ae1f03c70e6d69b2f11bf0d9"
+    },
+    "GEOquery": {
+      "Package": "GEOquery",
+      "Version": "2.72.0",
+      "Source": "Bioconductor",
+      "Repository": "Bioconductor",
+      "Requirements": ["Biobase", "dplyr", "limma", "readr", "tidyr", "xml2"]
+    },
+    "limma": {
+      "Package": "limma",
+      "Version": "3.60.0",
+      "Source": "Bioconductor",
+      "Repository": "Bioconductor"
+    },
+    "STRINGdb": {
+      "Package": "STRINGdb",
+      "Version": "2.16.0",
+      "Source": "Bioconductor",
+      "Repository": "Bioconductor"
+    },
+    "ggplot2": {
+      "Package": "ggplot2",
+      "Version": "3.5.1",
+      "Source": "CRAN",
+      "Repository": "CRAN",
+      "Hash": "0fb27b4a8f95a5f2f919f53c5cdc8c46"
+    },
+    "ggrepel": {
+      "Package": "ggrepel",
+      "Version": "0.9.5",
+      "Source": "CRAN",
+      "Repository": "CRAN",
+      "Hash": "6a186ae9b4eff4d805dab77bc71f4e9c"
+    },
+    "dplyr": {
+      "Package": "dplyr",
+      "Version": "1.1.4",
+      "Source": "CRAN",
+      "Repository": "CRAN",
+      "Hash": "fedd9d00c2944ff00a0e2696ccf048ec"
+    },
+    "igraph": {
+      "Package": "igraph",
+      "Version": "2.0.3",
+      "Source": "CRAN",
+      "Repository": "CRAN",
+      "Hash": "08c3a573ead4984ad9f3e4c1bf9c3f5f"
+    },
+    "ggraph": {
+      "Package": "ggraph",
+      "Version": "2.2.1",
+      "Source": "CRAN",
+      "Repository": "CRAN",
+      "Hash": "c8e5f48e1bab88c7c5e2aaa86e6dc6e8"
+    },
+    "rio": {
+      "Package": "rio",
+      "Version": "1.2.1",
+      "Source": "CRAN",
+      "Repository": "CRAN",
+      "Hash": "f61a0bc5c1f5fbf14e6b2f03eeaf3be1"
+    },
+    "stringr": {
+      "Package": "stringr",
+      "Version": "1.5.1",
+      "Source": "CRAN",
+      "Repository": "CRAN",
+      "Hash": "960e2ae9e09656611e0b8214ad543207"
+    },
+    "renv": {
+      "Package": "renv",
+      "Version": "1.0.7",
+      "Source": "CRAN",
+      "Repository": "CRAN",
+      "Hash": "397b7b2a265bc5a7a06852524dafd5c3"
+    }
+  }
+}

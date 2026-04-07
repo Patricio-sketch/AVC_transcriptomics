@@ -1,0 +1,53 @@
+# =============================================================================
+# pre-commit hook configuration — AVC Transcriptomics
+# =============================================================================
+# Automatically strips Jupyter notebook outputs and metadata before every
+# commit, preventing accidental leakage of HuggingFace tokens, API keys,
+# or large cell outputs into version history.
+#
+# Setup (one-time, per machine):
+#   pip install pre-commit nbstripout
+#   pre-commit install
+#
+# Manual run against all files:
+#   pre-commit run --all-files
+# =============================================================================
+
+repos:
+  # ---------------------------------------------------------------------------
+  # nbstripout: strips Jupyter notebook outputs and execution counts.
+  # This is the primary defense against committing HF_TOKEN values that
+  # appear in cell outputs after notebook execution.
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/kynan/nbstripout
+    rev: 0.7.1
+    hooks:
+      - id: nbstripout
+        args: [--extra-keys, "metadata.kernelspec metadata.language_info"]
+
+  # ---------------------------------------------------------------------------
+  # Standard pre-commit hooks for general hygiene
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: '\.ipynb$'
+      - id: end-of-file-fixer
+        exclude: '\.ipynb$'
+      - id: check-yaml
+      - id: check-json
+        exclude: '\.ipynb$'
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # ---------------------------------------------------------------------------
+  # Secret detection: scans for tokens, API keys, and credentials.
+  # Catches HF_TOKEN values even in non-notebook files.
+  # ---------------------------------------------------------------------------
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args: ['--baseline', '.secrets.baseline']
+        exclude: '(renv\.lock|\.gitignore|README\.md)'

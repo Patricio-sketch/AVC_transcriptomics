@@ -5,11 +5,16 @@ on:
     paths:
       - 'configurar_ambiente.R'
       - 'requirements.txt'
+      - 'environment.yml'
       - '.github/workflows/check-environment.yml'
   pull_request:
     paths:
       - 'configurar_ambiente.R'
       - 'requirements.txt'
+      - 'environment.yml'
+
+permissions:
+  contents: read
 
 jobs:
   check-r:
@@ -42,4 +47,27 @@ jobs:
           import sentence_transformers, transformers, torch
           import pandas, numpy, sklearn, seaborn, matplotlib
           print('All Python packages imported successfully.')
+          "
+
+  check-conda-env:
+    name: Validate conda environment.yml
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          python-version: '3.11'
+          activate-environment: avc_transcriptomics
+          channels: conda-forge,defaults
+      - name: Validate environment.yml syntax and resolve dependencies
+        shell: bash -el {0}
+        run: |
+          conda env update --name avc_transcriptomics --file environment.yml --prune
+          echo "Conda environment resolved successfully."
+      - name: Smoke test conda environment imports
+        shell: bash -el {0}
+        run: |
+          python -c "
+          import pandas, numpy, sklearn, seaborn, matplotlib, torch
+          print('All conda-installed packages imported successfully.')
           "

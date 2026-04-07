@@ -1,0 +1,55 @@
+# =============================================================================
+# .gitattributes — AVC Transcriptomics
+# =============================================================================
+# Git LFS tracking rules for large binary files.
+#
+# SETUP (one-time, per machine):
+#   git lfs install
+#   git lfs pull   # to download already-tracked LFS files
+#
+# Files matched by these patterns are stored in Git LFS instead of the
+# regular git object store. This keeps the repository clone size small
+# while still version-controlling large research artifacts.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Model weights — HuggingFace / PyTorch / safetensors format
+# ---------------------------------------------------------------------------
+*.safetensors   filter=lfs diff=lfs merge=lfs -text
+*.pt            filter=lfs diff=lfs merge=lfs -text
+*.pth           filter=lfs diff=lfs merge=lfs -text
+*.bin           filter=lfs diff=lfs merge=lfs -text
+*.onnx          filter=lfs diff=lfs merge=lfs -text
+
+# ---------------------------------------------------------------------------
+# R binary objects (rds are now gitignored, but rule kept as safety net
+# in case policy changes in the future)
+# ---------------------------------------------------------------------------
+*.rds           filter=lfs diff=lfs merge=lfs -text
+*.RData         filter=lfs diff=lfs merge=lfs -text
+
+# ---------------------------------------------------------------------------
+# General large data formats
+# ---------------------------------------------------------------------------
+*.gz            filter=lfs diff=lfs merge=lfs -text
+*.zip           filter=lfs diff=lfs merge=lfs -text
+*.h5            filter=lfs diff=lfs merge=lfs -text
+*.hdf5          filter=lfs diff=lfs merge=lfs -text
+*.parquet       filter=lfs diff=lfs merge=lfs -text
+*.feather       filter=lfs diff=lfs merge=lfs -text
+
+# ---------------------------------------------------------------------------
+# Ensure text files use LF line endings on all platforms (important for
+# cross-platform R/Python scripts)
+# ---------------------------------------------------------------------------
+*.R             text eol=lf
+*.py            text eol=lf
+*.ipynb         text eol=lf
+*.yml           text eol=lf
+*.yaml          text eol=lf
+*.md            text eol=lf
+*.txt           text eol=lf
+*.json          text eol=lf
+*.tsv           text eol=lf
+*.csv           text eol=lf
+*.sh            text eol=lf

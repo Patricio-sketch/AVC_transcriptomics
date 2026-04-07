@@ -20,8 +20,16 @@ outputs/
 # O modelo SBERT fine-tunado NÃO é ignorado: representa treinamento custoso
 # (requer GPU) e não é facilmente reproduzível sem os mesmos hiperparâmetros,
 # dados de treino e hardware. Portanto é versionado explicitamente.
+# Nota: os tipos de arquivo *.safetensors, *.pt, *.bin estão configurados para
+# Git LFS em .gitattributes. Arquivos de cache local ainda são ignorados abaixo.
 !outputs/sbert_nanda_finetuned/
 !outputs/sbert_nanda_finetuned/**
+
+# Objetos R serializados (rds/) são regenerados por script.R a cada execução.
+# Versionar binários que mudam a cada run polui o histórico e cria risco de
+# resultados desatualizados serem usados sem re-execução. A pasta é preservada
+# via rds/.gitkeep; regenere com: Rscript script.R
+rds/*.rds
 
 
 # -----------------------------------------------------------------------------
@@ -72,9 +80,11 @@ workspace_*.RData
 # Arquivos de projeto RStudio (descomente se o .Rproj for gerado acidentalmente)
 # *.Rproj
 .Rproj.user/
-# Biblioteca gerenciada pelo renv (caso seja adotado futuramente)
+# renv — lock file IS versioned; library and cache are NOT
 renv/library/
+renv/staging/
 renv/.cache/
+# renv.lock is intentionally NOT listed here so it is tracked by git
 
 
 # -----------------------------------------------------------------------------
@@ -103,6 +113,9 @@ ehthumbs.db
 *.swo
 *~
 
+# detect-secrets
+.secrets.baseline.bak
+
 
 # -----------------------------------------------------------------------------
 # Cache HuggingFace global (referência — a pasta real fica em ~/.cache)
@@ -130,9 +143,10 @@ ehthumbs.db
 # 2. DADOS BRUTOS: arquivos GEO (geo_cache/) são baixados sob demanda pelo
 #    GEOquery e não são versionados; o ID do dataset (GSE16561) é suficiente
 #    para reprodução.
-# 3. OUTPUTS INTERMEDIÁRIOS: figuras, CSVs e RDS gerados pela pipeline ficam
-#    fora do git; qualquer colaborador pode regenerá-los rodando script.R e os
-#    notebooks na ordem documentada no README.
+# 3. OUTPUTS INTERMEDIÁRIOS: figuras, CSVs e objetos R serializados (rds/*.rds)
+#    gerados pela pipeline ficam fora do git; qualquer colaborador pode
+#    regenerá-los rodando script.R na ordem documentada no README.
+#    A pasta rds/ existe no repositório via rds/.gitkeep.
 # 4. MODELO FINE-TUNADO: outputs/sbert_nanda_finetuned/ é versionado via Git
 #    LFS (recomendado para o .safetensors de ~418 MB) por ser difícil de
 #    reproduzir sem GPU e por representar um artefato de pesquisa único.
