@@ -206,7 +206,7 @@ cat(sprintf(
 # SECTION 3 — Volcano Plot
 # =============================================================================
 # Visual summary of the differential expression results.
-# Blue = up-regulated in stroke; purple = down-regulated; grey = not significant.
+# Yellow = up-regulated in stroke; purple = down-regulated; grey = not significant.
 # Dashed lines mark the |logFC| > 1 and FDR < 0.05 thresholds.
 # =============================================================================
 
@@ -227,7 +227,7 @@ p_volcano <- ggplot(
     aes(x = logFC, y = -log10(adj.P.Val), color = volcano_class)
   ) +
   geom_point(size = 2, alpha = 0.8) +
-  scale_color_manual(values = c(Up = "blue", Down = "purple", NS = "grey70")) +
+  scale_color_manual(values = c(Up = "#E3B505", Down = "purple", NS = "grey70")) +
   geom_vline(xintercept = c(-lfc_cutoff, lfc_cutoff),
              linetype = "dashed", linewidth = 0.4) +
   geom_hline(yintercept = -log10(fdr_cutoff),
@@ -392,7 +392,7 @@ p_ppi <- ggraph(g_cc, layout = "fr") +
   geom_edge_link(aes(width = weight), alpha = 0.25) +
   scale_edge_width(range = c(0.2, 2.2), guide = "none") +
   geom_node_point(aes(color = regulation), size = 4) +
-  scale_color_manual(values = c(Up = "blue", Down = "purple")) +
+  scale_color_manual(values = c(Up = "#E3B505", Down = "purple")) +
   geom_node_text(aes(label = gene_symbol), repel = TRUE, size = 3.5) +
   theme_void(base_size = 14) +
   theme(
@@ -618,7 +618,7 @@ plot_string_enrichment_dotplot <- function(enr_df, top_n = 50,
     color = -log10(fdr)
   )) +
     geom_point(alpha = 0.9) +
-    scale_color_gradient(low = "#74add1", high = "#d73027") +
+    scale_color_gradient(low = "#E3B505", high = "#d73027") +
     guides(
       size  = guide_legend(order = 1, override.aes = list(alpha = 1)),
       color = guide_colorbar(order = 2)
@@ -699,6 +699,7 @@ if (!is.null(dotplot_down)) {
 # =============================================================================
 
 library(dplyr)
+library(tidyr)
 library(ggplot2)
 
 nanda_mapping <- read.csv(
@@ -745,6 +746,157 @@ dist_diag <- nanda_mapping %>%
   arrange(desc(n_pares))
 print(dist_diag)
 
+# ── Normalização de pares por número de vias ─────────────────────────────
+# Forma correta: conta vias únicas por direção (evita confundir 9 Up vs 26 Down).
+n_vias_up   <- nanda_mapping %>%
+  filter(regulacao == "Up") %>%
+  pull(via) %>%
+  n_distinct()
+n_vias_down <- nanda_mapping %>%
+  filter(regulacao == "Down") %>%
+  pull(via) %>%
+  n_distinct()
+
+cat(sprintf(
+  "\nVias únicas — Up: %d  |  Down: %d\n",
+  n_vias_up, n_vias_down
+))
+
+# Pares normalizados por via (= densidade de cobertura)
+dist_norm <- nanda_mapping %>%
+  group_by(diagnostico_nanda, regulacao) %>%
+  summarise(n_pares_raw = n(), .groups = "drop") %>%
+  mutate(
+    n_vias_direcao = if_else(regulacao == "Up", n_vias_up, n_vias_down),
+    pares_por_via  = n_pares_raw / n_vias_direcao,
+    label_curto    = stringr::str_extract(diagnostico_nanda, "^[^:]+")
+  ) %>%
+  arrange(desc(pares_por_via))
+
+cat("\nDensidade de cobertura (pares / n_vias) por diagnóstico:\n")
+print(dist_norm %>% select(label_curto, regulacao,
+                            n_pares_raw, n_vias_direcao,
+                            pares_por_via), n = Inf)
+
+dir.create("outputs/nanda", recursive = TRUE, showWarnings = FALSE)
+dir.create("outputs/figures", recursive = TRUE, showWarnings = FALSE)
+write.csv(
+  dist_norm,
+  "outputs/nanda/cobertura_normalizada.csv",
+  row.names = FALSE, fileEncoding = "UTF-8"
+)
+cat("✓ Exportado → outputs/nanda/cobertura_normalizada.csv\n")
+
+# Plot comparativo normalizado
+p_norm <- ggplot(
+    dist_norm,
+    aes(
+      x = pares_por_via,
+      y = reorder(label_curto, pares_por_via),
+      fill = regulacao
+    )
+  ) +
+  geom_col(position = "dodge", width = 0.7) +
+  scale_fill_manual(values = c(Up = "#E3B505", Down = "purple")) +
+  geom_vline(xintercept = 1.0, linetype = "dashed",
+             color = "grey40", linewidth = 0.4) +
+  annotate("text", x = 1.02, y = 0.5,
+           label = "1 par / via", size = 3,
+           color = "grey40", hjust = 0) +
+  labs(
+    title   = "Cobertura Normalizada — Pares NANDA-I por Via",
+    subtitle = "Valores > 1.0 = diagnóstico aparece em média em mais de uma via por direção",
+    x       = "Pares válidos / número de vias na direção",
+    y       = NULL,
+    fill    = "Regulação"
+  ) +
+  theme_bw(base_size = 12) +
+  theme(axis.text.y = element_text(size = 9),
+        legend.position = "right")
+
+ggsave("outputs/figures/cobertura_normalizada.png",
+  plot = p_norm, width = 12, height = 6,
+  dpi = 300, bg = "white")
+cat("✓ Plot exportado → outputs/figures/cobertura_normalizada.png\n")
+
+# ── Análise de especificidade direcional ─────────────────────────────────────
+# Para cada diagnóstico NANDA-I, calcula:
+#   - score médio nos pares Up
+#   - score médio nos pares Down
+#   - índice de especificidade: (score_up - score_down) / (score_up + score_down)
+#   Valores próximos de +1 = diagnóstico primariamente Up-driven
+#   Valores próximos de -1 = diagnóstico primariamente Down-driven
+#   Valores próximos de 0  = diagnóstico não-específico (sinal de colapso)
+
+especificidade <- nanda_mapping %>%
+  group_by(diagnostico_nanda, regulacao) %>%
+  summarise(score_medio = mean(similaridade), .groups = "drop") %>%
+  tidyr::pivot_wider(
+    names_from  = regulacao,
+    values_from = score_medio,
+    names_prefix = "score_"
+  ) %>%
+  {
+    d <- .
+    if (!"score_Up" %in% names(d)) d$score_Up <- 0
+    if (!"score_Down" %in% names(d)) d$score_Down <- 0
+    d
+  } %>%
+  mutate(
+    score_Up   = replace_na(score_Up, 0),
+    score_Down = replace_na(score_Down, 0),
+    indice_especificidade = (score_Up - score_Down) /
+      (score_Up + score_Down + 1e-9)
+  ) %>%
+  arrange(desc(abs(indice_especificidade)))
+
+cat("\n--- Especificidade Direcional dos Diagnósticos NANDA-I ---\n")
+cat("(+1 = exclusivo Up/Inato | -1 = exclusivo Down/Adaptativo | 0 = não-específico)\n\n")
+print(especificidade, n = Inf)
+
+dir.create("outputs/nanda", recursive = TRUE, showWarnings = FALSE)
+write.csv(
+  especificidade,
+  "outputs/nanda/especificidade_direcional.csv",
+  row.names = FALSE,
+  fileEncoding = "UTF-8"
+)
+
+# Plot de especificidade
+p_espec <- ggplot(
+    especificidade,
+    aes(
+      x = indice_especificidade,
+      y = reorder(
+        stringr::str_extract(diagnostico_nanda, "^[^:]+"),
+        indice_especificidade
+      ),
+      fill = indice_especificidade > 0
+    )
+  ) +
+  geom_col(show.legend = FALSE) +
+  scale_fill_manual(values = c("TRUE" = "#E3B505", "FALSE" = "purple")) +
+  geom_vline(xintercept = 0, linetype = "dashed") +
+  labs(
+    title = "Especificidade Direcional dos Diagnósticos NANDA-I",
+    subtitle = "Amarelo = primariamente Up/Inato  |  Roxo = primariamente Down/Adaptativo",
+    x = "Índice de Especificidade  [(Up - Down) / (Up + Down)]",
+    y = NULL
+  ) +
+  theme_bw(base_size = 12) +
+  theme(axis.text.y = element_text(size = 9))
+
+ggsave(
+  "outputs/figures/especificidade_direcional.png",
+  plot   = p_espec,
+  width  = 12,
+  height = 7,
+  dpi    = 300,
+  bg     = "white"
+)
+
+message("✓ Análise de especificidade direcional salva.")
+
 # ── Barplot: valid pairs per NANDA-I diagnosis, coloured by regulation ────────
 # Counts how many pathway–diagnosis pairs each NANDA-I code accumulated, split
 # by regulatory direction, to highlight which diagnoses are most supported by
@@ -769,7 +921,7 @@ p_bar <- ggplot(
     aes(x = n_pares, y = diagnostico_nanda, fill = regulacao)
   ) +
   geom_col(position = "dodge", width = 0.7) +
-  scale_fill_manual(values = c(Up = "blue", Down = "purple")) +
+  scale_fill_manual(values = c(Up = "#E3B505", Down = "purple")) +
   labs(
     title = "Valid Pathway\u2013NANDA-I Pairs per Diagnosis (similarity \u2265 0.65)",
     x     = "Number of valid pairs",

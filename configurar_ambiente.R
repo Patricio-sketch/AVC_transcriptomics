@@ -26,6 +26,7 @@ packages <- c(
   "ggplot2",    # Grammar-of-graphics plotting
   "ggrepel",    # Non-overlapping text labels for ggplot2
   "dplyr",      # Data manipulation and pipelines
+  "tidyr",      # pivot_wider / replace_na (NANDA directional specificity)
   "igraph",     # Graph construction and network analysis
   "ggraph",     # Graph visualization using ggplot2 grammar
   "rio",        # Unified data import/export (TSV, CSV, RDS)
