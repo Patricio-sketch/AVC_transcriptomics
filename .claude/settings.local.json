@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/Usuario/AppData/Local/Programs/**)",
+      "Read(//c/Users/Usuario/miniconda3/**)",
+      "Read(//c/Users/Usuario/**)",
+      "Bash(/c/Users/Usuario/anaconda3/python.exe -c ':*)"
+    ]
+  }
+}

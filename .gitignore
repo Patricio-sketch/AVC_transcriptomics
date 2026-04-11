@@ -1,3 +1,7 @@
+# AVC Transcriptomics × NANDA-I — .gitignore
+# Pipeline v4-expansao-semantica-MNRL
+# Stages 1–3 complete
+
 # ── Dados e cache GEO ────────────────────────────────────────────
 geo_cache/
 
@@ -11,6 +15,11 @@ outputs/sbert_nanda_finetuned_backup.pkl
 outputs/figures/
 outputs/nanda/
 
+# ── Outputs Stage 3 — LLM-as-judge (reproduzíveis) ──────────────
+outputs/nanda/nanda_judge_concordancia.csv
+outputs/nanda/judge_metrics_summary.csv
+outputs/figures/judge_concordance_scatter.png
+
 # ── Objetos R serializados ───────────────────────────────────────
 rds/
 
@@ -19,6 +28,8 @@ rds/
 *.env
 .env.local
 .env.*.local
+.env.example.local
+python-dotenv.log
 
 # ── Checkpoints e metadados do modelo ────────────────────────────
 outputs/sbert_nanda_finetuned/checkpoint_meta.json
@@ -64,6 +75,14 @@ desktop.ini
 .idea/
 *.swp
 *.swo
+
+# ── Arquivos temporários de sessão e debug ────────────────────────
+*.log
+*.tmp
+debug_*.csv
+temp_*.csv
+*_backup.csv
+*_emergency.pkl
 
 # ── EXCEÇÕES — arquivos que devem ser versionados ────────────────
 !string_enrichment/

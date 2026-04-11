@@ -1,6 +1,6 @@
 # AVC Transcriptomics — Ischemic Stroke Pathway × NANDA-I Mapping
 
-![Python 3.11](https://img.shields.io/badge/Python-3.11-blue) ![R 4.x](https://img.shields.io/badge/R-4.x-276DC3) ![Status](https://img.shields.io/badge/status-work%20in%20progress-yellow)
+![Python 3.11](https://img.shields.io/badge/Python-3.11-blue) ![R 4.x](https://img.shields.io/badge/R-4.x-276DC3) ![Stage 3](https://img.shields.io/badge/Stage%203-complete-brightgreen) ![Pipeline](https://img.shields.io/badge/pipeline-v4--MNRL-blue)
 
 **Connecting peripheral-blood transcriptomics of ischemic stroke to NANDA-I nursing diagnoses via bioinformatics and clinical NLP.**
 
@@ -10,7 +10,7 @@
 
 Ischemic stroke triggers a rapid and multilayered transcriptional response in peripheral blood, encompassing innate immune activation, lymphocyte suppression, and systemic inflammatory signaling. This project bridges translational bioinformatics and clinical nursing science by systematically mapping the biological pathways enriched in peripheral blood gene expression data (GEO dataset GSE16561) to NANDA-I nursing diagnoses — the standardized clinical taxonomy used in nursing care planning worldwide.
 
-The analytical workflow operates across **three sequential stages**. Stage 1 performs differential expression analysis (limma) and protein-protein interaction network construction (STRINGdb) in R. Stage 2 applies a hybrid semantic embedding strategy in Python, fusing clinical domain knowledge from ClinicalBERT with biomedical sentence-level representations from a fine-tuned SBERT model, and exports a ranked, threshold-filtered table of pathway–diagnosis pairs grounded in molecular evidence. Stage 3 (currently under active development) implements an LLM-as-judge cross-validation layer using **Claude Sonnet 4.6** (temperature = 0, seed = 42) to provide an independent mechanistic signal for each pathway–diagnosis pair that survives the Stage 2 threshold.
+The analytical workflow operates across **three sequential stages**. Stage 1 performs differential expression analysis (limma) and protein-protein interaction network construction (STRINGdb) in R. Stage 2 applies a hybrid semantic embedding strategy in Python, fusing clinical domain knowledge from ClinicalBERT with biomedical sentence-level representations from a fine-tuned SBERT model, and exports a ranked, threshold-filtered table of pathway–diagnosis pairs grounded in molecular evidence. Stage 3 implements an LLM-as-judge cross-validation layer using **Claude Sonnet 4.6** (temperature = 0, seed = 42) to provide an independent mechanistic signal for each pathway–diagnosis pair that survives the Stage 2 threshold.
 
 The motivation for Stage 3 is a documented **entropy collapse** in Stage 2: Shannon entropy of the per-pathway similarity score distribution over NANDA-I diagnoses reaches H/H_max = 0.960 across all 35 pathways, indicating that the embedding pipeline alone does not discriminate biologically distinct pathways with sufficient resolution for unqualified clinical claims. The stratified output of Stage 3 (high concordance / moderate / divergent) constitutes the primary validation object for the second paper in this line of research — a structured Delphi study with clinical nursing experts.
 
@@ -24,7 +24,7 @@ The pipeline operates in three sequential stages, designed so that each stage's 
 
 **Stage 2 — Semantic mapping via hybrid embeddings (Python, `clinicalbert_vias_AVC.ipynb`).** Each enriched biological pathway is semantically expanded into a structured natural-language description incorporating gene names and mechanistic context (188–255 characters), providing richer embedding surface than the raw pathway label alone. NANDA-I nursing diagnoses are encoded in two representations: a short label form (`nanda_labels`) for structural separation during training, and a full, structured description including defining characteristics and related factors (`nanda_full`) for embedding inference — a deliberate separation that prevents label leakage into the similarity space. Each expanded pathway and each NANDA-I description is embedded independently using two complementary models: the `[CLS]` token from `medicalai/ClinicalBERT`, and sentence-level embeddings from a fine-tuned S-PubMedBert model (`pritamdeka/S-PubMedBert-MS-MARCO-SCIFACT`, adapted in `finetune_sbert_nanda.ipynb`). The two cosine similarity matrices are averaged with equal weight (α = 0.5) in similarity space — late fusion — to preserve the metric geometry of each embedding space. The similarity threshold is calibrated by pairwise permutation (z = 18.4), corresponding to a cosine cutoff of 0.65. A Shannon entropy audit is performed per pathway on the resulting similarity distribution; the results, including `ratio_H_Hmax` and `alerta_colapso`, are exported to `discriminacao_por_via.csv`. The column `via_expandida` in the main output CSV records the full expanded pathway description used for embedding. Calibration metadata is stored in `threshold_calibration.csv` with fields `colapso_confirmado`, `entropia_ratio_medio`, `n_vias_em_colapso`, `spearman_finetuning`, and `pipeline_versao`.
 
-**Stage 3 — LLM-based mechanistic cross-validation (Python, `llm_judge_nanda.ipynb` — to be created).** Each pathway–diagnosis pair surviving the Stage 2 threshold is submitted to **Claude Sonnet 4.6** (temperature = 0, seed = 42) for independent mechanistic evaluation. To prevent anchoring bias, the prompt is structured to elicit justification before score, in the order: mechanistic context → reasoning → score. Each response returns four structured fields: `justificativa` (free-text mechanistic rationale), `score_concordancia` (numeric, 0–10), `nivel_confianca` (categorical: high / moderate / low), and `flag_lexical` (boolean: flags pairs where similarity is driven primarily by shared terminology rather than mechanistic correspondence). Pairs are stratified into three tiers: high concordance, moderate concordance, and divergent. Estimated cost per full run: ~$5–6 with Sonnet 4.6 standard API; ~$2.50–3 with the Batch API. The stratified output (`nanda_judge_concordancia.csv`) is the primary validation object for the Delphi expert study.
+**Stage 3 — LLM-based mechanistic cross-validation (Python, `llm_judge_nanda.ipynb` — complete).** Each of the 170 unique pathway–diagnosis pairs surviving the Stage 2 threshold is submitted to **Claude Sonnet 4.6** (temperature = 0, seed = 42) for independent mechanistic evaluation. To prevent anchoring bias, the prompt is structured to elicit justification before score: mechanistic reasoning is produced first, and the numeric score is assigned only after the rationale is complete. Each response returns four structured fields: `justificativa` (free-text mechanistic rationale), `score_concordancia` (float, 0.0–1.0), `nivel_confianca` (alta / moderada / baixa), and `flag_lexical` (boolean: flags pairs where similarity is driven by shared vocabulary rather than mechanistic correspondence). Processing is incremental with checkpoint resume — interruptions are safe, and only unprocessed pairs are sent on re-run. Pairs are stratified into three tiers: **high concordance** (score ≥ 0.70 and flag_lexical = False), **moderate concordance** (score 0.40–0.69), and **divergent** (score < 0.40 or flag_lexical = True). The Spearman correlation between Stage 2 cosine similarity and Stage 3 judge score is ρ = 0.26 (p = 6.15×10⁻⁴), confirming that the two methods capture different relevance dimensions — a methodological finding consistent with the entropy collapse documented in Stage 2. Of 170 pairs: 42 (24.7%) reached high concordance, 9 (5.3%) moderate concordance, and 119 (70.0%) were divergent; 119 pairs (70.0%) received flag_lexical = True. The high-concordance pairs constitute the primary hypothesis set for the Delphi expert validation study.
 
 ---
 
@@ -36,7 +36,7 @@ AVC_transcriptomics/
 ├── script.R                          # Stage 1: DEA → PPI → enrichment → NANDA import (R)
 ├── clinicalbert_vias_AVC.ipynb       # Stage 2: embeddings, late fusion, NANDA mapping (Python)
 ├── finetune_sbert_nanda.ipynb        # Stage 2 prerequisite: fine-tunes S-PubMedBert
-├── llm_judge_nanda.ipynb             # Stage 3: LLM-as-judge cross-validation (to be created)
+├── llm_judge_nanda.ipynb             # Stage 3: LLM-as-judge cross-validation (complete)
 ├── configurar_ambiente.R             # R package installation helper
 ├── environment.yml                   # Conda environment (Python 3.11, torch, sentence-transformers)
 ├── requirements.txt                  # pip requirements for Python stages
@@ -185,7 +185,8 @@ Run `llm_judge_nanda.ipynb` (to be created) after Stage 2 is complete and `outpu
 | `discriminacao_por_via.csv` | Per-pathway Shannon entropy audit; fields include `ratio_H_Hmax` and `alerta_colapso` | CSV |
 | `especificidade_direcional.csv` | Directional specificity index per NANDA-I diagnosis | CSV |
 | `cobertura_normalizada.csv` | Normalized coverage: valid pairs per pathway per NANDA-I diagnosis | CSV |
-| `nanda_judge_concordancia.csv` | Stage 3 LLM-as-judge output: fields `justificativa`, `score_concordancia`, `nivel_confianca`, `flag_lexical`, stratification tier *(to be created)* | CSV |
+| `nanda_judge_concordancia.csv` | 170 pathway–diagnosis pairs with judge fields: justificativa, score_concordancia, nivel_confianca, flag_lexical, judge_attempts | CSV (UTF-8) |
+| `judge_metrics_summary.csv` | Global Stage 3 metrics: Spearman ρ = 0.26, stratification counts, flag_lexical rate | CSV (UTF-8) |
 
 ### Figures (`outputs/figures/`)
 
@@ -200,6 +201,7 @@ Run `llm_judge_nanda.ipynb` (to be created) after Stage 2 is complete and `outpu
 | `barplot_nanda_summary.png` | Bar chart of valid pathway–diagnosis pairs per NANDA-I code, split by regulatory direction | PNG (300 dpi) |
 | `cobertura_normalizada.png` | Normalized coverage plot: valid pairs per pathway per NANDA-I diagnosis (directional) | PNG (300 dpi) |
 | `especificidade_direcional.png` | Directional specificity index per NANDA-I diagnosis (divergence bar chart) | PNG (300 dpi) |
+| `judge_concordance_scatter.png` | Scatter plot: Stage 2 cosine similarity vs Stage 3 judge score, coloured by convergence stratum | PNG (300 dpi) |
 
 ---
 
@@ -209,7 +211,7 @@ Run `llm_judge_nanda.ipynb` (to be created) after Stage 2 is complete and `outpu
 
 **Stage 2 — Semantic expansion, hybrid embedding, and threshold calibration.** Each enriched biological pathway is expanded into a structured natural-language description incorporating gene names and mechanistic context (188–255 characters), providing substantially richer embedding surface than the raw pathway label. NANDA-I nursing diagnoses are encoded as full structured descriptions including defining characteristics and related factors, separated from short label forms (`nanda_labels` vs. `nanda_full`) to prevent label leakage during fine-tuning. The S-PubMedBert base model is fine-tuned using `MultipleNegativesRankingLoss` — rather than `CosineSimilarityLoss` — because MNRL operates on relative ranking objectives and avoids the embedding compression artifact that CosineSimilarityLoss induces in models trained on small datasets. Training and validation sets are split without leakage by stratifying on coarse similarity bins (low / mid / high); the honest Spearman correlation on the held-out validation set is 0.477. Pathway and diagnosis descriptions are embedded in two independent semantic spaces: the `[CLS]` token from `medicalai/ClinicalBERT` (L2-normalized), preferred over mean pooling because ClinicalBERT's next-sentence prediction pre-training concentrates global sentence information in the `[CLS]` position; and sentence-level embeddings from the fine-tuned S-PubMedBert model. The two cosine similarity matrices are averaged with equal weight (α = 0.5) in similarity space (late fusion), preserving each model's metric geometry. The similarity threshold is calibrated by pairwise permutation (z = 18.4), yielding a cosine cutoff of 0.65 and 175 valid pairs across 15 distinct NANDA-I diagnoses. A Shannon entropy audit is performed per pathway on the resulting similarity score distribution; the ratio H/H_max = 0.960 across all 35 pathways indicates near-uniform distribution of similarity mass over NANDA-I diagnoses, motivating Stage 3 cross-validation.
 
-**Stage 3 — LLM-as-judge mechanistic cross-validation (pending implementation).** Each pathway–diagnosis pair surviving the Stage 2 threshold is independently evaluated by Claude Sonnet 4.6 (temperature = 0, seed = 42) operating as a mechanistic judge. The prompt is structured with anti-anchoring design: the model generates a mechanistic justification before assigning a score, preventing score priming from influencing the reasoning. Each response returns four structured fields: `justificativa` (free-text mechanistic rationale linking the biological pathway to the clinical nursing diagnosis), `score_concordancia` (numeric, 0–10), `nivel_confianca` (categorical), and `flag_lexical` (boolean: detects pairs where similarity is driven primarily by shared terminology rather than mechanistic correspondence). Pairs are stratified into three tiers — high concordance, moderate concordance, and divergent — generating a filtered set that constitutes the primary evidence base for a structured Delphi expert validation study.
+**Stage 3 — LLM-as-judge mechanistic cross-validation (complete).** Each of the 170 unique pathway–diagnosis pairs surviving the Stage 2 threshold is independently evaluated by Claude Sonnet 4.6 (temperature = 0, seed = 42) operating as a mechanistic judge. The prompt is designed with an anti-anchoring constraint: the model generates a mechanistic justification before assigning a numeric score, preventing the Stage 2 cosine similarity value from priming the reasoning. Responses are parsed as strict JSON with four required fields: `justificativa`, `score_concordancia`, `nivel_confianca`, and `flag_lexical`. API calls are made sequentially with exponential-backoff retry (up to 3 attempts) and incremental CSV writing, so that the pipeline can be safely interrupted and resumed from a checkpoint. Pairs are stratified into three convergence tiers based on score threshold and lexical flag. The Spearman correlation between Stage 2 cosine similarity and Stage 3 judge score is ρ = 0.26 (p = 6.15×10⁻⁴), confirming that the two methods capture different dimensions of pathway–diagnosis relevance — a methodological finding that validates the Stage 3 design decision. The 42 high-concordance pairs (24.7%) constitute the primary evidence base for the planned structured Delphi expert validation study.
 
 ---
 
@@ -235,7 +237,7 @@ If you use this code or pipeline in your research, please cite:
 
 ```bibtex
 @misc{avc_transcriptomics,
-  author       = {Patricio-sketch},
+  author       = {Alexandre de Oliveira Tinoco Patricio},
   title        = {{AVC Transcriptomics}: Ischemic Stroke Pathway to NANDA-I Nursing Diagnosis Mapping},
   year         = {2025},
   howpublished = {\url{https://github.com/Patricio-sketch/AVC_transcriptomics}},
@@ -249,5 +251,10 @@ This project is released under the **MIT License**. See `LICENSE` for details.
 
 ---
 
-> **Current pipeline version:** v4-expansao-semantica-MNRL
-> Stage 3 (LLM-as-judge) is under active development and will be implemented in `llm_judge_nanda.ipynb`. The current output `nanda_mapping_completo_threshold65.csv` (175 pairs, 15 distinct NANDA-I diagnoses, threshold z = 18.4) represents the Stage 2 baseline pending Stage 3 cross-validation.
+> **Current pipeline version:** v4-expansao-semantica-MNRL  
+> All three stages are complete. Stage 3 (LLM-as-judge) was
+> executed with Claude Sonnet 4.6 (T=0, seed=42) on 170 unique
+> pairs from the Stage 2 output. Results: ρ(S2, S3) = 0.26,
+> 42 high-concordance pairs (24.7%), 119 divergent (70.0%).
+> The `nanda_judge_concordancia.csv` file is the primary input
+> for the planned Delphi expert validation study (second paper).
